@@ -1,40 +1,94 @@
+
 #include <AMReX.H>
-#include <AMReX_Print.H>
 #include <AMReX_ParmParse.H>
+#include <AMReX_ParallelDescriptor.H>
+#include <AMReX_Amr.H>
 
-#include "hydroexa/HydroLevelBld.hpp"
+//#include <HydroEXA.H>
 
-int main(int argc, char* argv[]) {
-    // Initialize AMReX (handles MPI and Kokkos/GPU init internally)
-    amrex::Initialize(argc, argv);
-    
+using namespace amrex;
+
+amrex::LevelBld* getLevelBld ();
+
+int main (int argc, char* argv[])
+{
+    amrex::Initialize(argc,argv);
+
+    BL_PROFILE_VAR("main()", pmain);
+
+    double timer_tot = amrex::second();
+    double timer_init = 0.;
+    double timer_advance = 0.;
+
+    int  max_step;
+    Real strt_time;
+    Real stop_time;
+
     {
+        ParmParse pp;
 
-        HydroLevelBld hydro_bld;
-        amrex::Amr HydroEXA(&hydro_bld);
-        
-        amrex::Real stop_time = 1.0;
-        int max_step = -1;
-        
-        amrex::ParmParse pp;
-        pp.query("t_final", stop_time);
-        pp.query("max_steps", max_step);
-        
-        HydroEXA.init(0., stop_time);
-        
-        amrex::Print() << "=======================================\n";
-        amrex::Print() << "          HydroEXA Initialized         \n";
-        amrex::Print() << "=======================================\n";
+        max_step  = -1;
+        strt_time = Real( 0.0);
+        stop_time = Real(-1.0);
 
-        while ( HydroEXA.okToContinue() 
-             && (HydroEXA.levelSteps(0) < max_step || max_step < 0) 
-             && (HydroEXA.cumTime() < stop_time || stop_time < 0.0) )
+        pp.query("max_step",max_step);
+        pp.query("strt_time",strt_time);
+        pp.query("stop_time",stop_time);
+    }
+
+    if (strt_time < Real(0.0)) {
+        amrex::Abort("MUST SPECIFY a non-negative strt_time");
+    }
+
+    if (max_step < 0 && stop_time < Real(0.0)) {
+        amrex::Abort("Exiting because neither max_step nor stop_time is non-negative.");
+    }
+
+    {
+        timer_init = amrex::second();
+
+        Amr amr(getLevelBld());
+        amr.init(strt_time,stop_time);
+
+        timer_init = amrex::second() - timer_init;
+
+        timer_advance = amrex::second();
+
+        while ( amr.okToContinue() &&
+                 (amr.levelSteps(0) < max_step || max_step < 0) &&
+               (amr.cumTime() < stop_time || stop_time < Real(0.0)) )
+
         {
-            HydroEXA.coarseTimeStep(stop_time);
+            //
+            // Do a coarse timestep.  Recursively calls timeStep()
+            //
+            amr.coarseTimeStep(stop_time);
+        }
+
+        timer_advance = amrex::second() - timer_advance;
+
+        // Write final checkpoint and plotfile
+        if (amr.stepOfLastCheckPoint() < amr.levelSteps(0)) {
+            amr.checkPoint();
+        }
+
+        if (amr.stepOfLastPlotFile() < amr.levelSteps(0)) {
+            amr.writePlotFile();
         }
     }
-    
-    amrex::Print() << "Finalizing HydroEXA...\n";
+
+    timer_tot = amrex::second() - timer_tot;
+
+    ParallelDescriptor::ReduceRealMax<double>({timer_tot, timer_init, timer_advance},
+                                              ParallelDescriptor::IOProcessorNumber());
+
+    amrex::Print() << "Run Time total        = " << timer_tot     << "\n"
+                   << "Run Time init         = " << timer_init    << "\n"
+                   << "Run Time advance      = " << timer_advance << "\n";
+
+    BL_PROFILE_VAR_STOP(pmain);
+
     amrex::Finalize();
+
     return 0;
 }

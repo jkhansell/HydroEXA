@@ -10,6 +10,15 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
+plt*
+# Match any build directory at any depth (e.g., build/, cmake-build-debug/, build-release/)
+**/[Bb]uild*/
+**/cmake-build-*/
+
+# Match any install directory at any depth
+**/[Ii]nstall*/
+**/[Bb]acktrace.0
+**/[Ee]rr.log
 
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
@@ -17,3 +26,4 @@ CMakeUserPresets.json
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #cmake-build-*
+
