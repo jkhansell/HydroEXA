@@ -1,0 +1,15 @@
+module load PrgEnv-cray
+module load cpe/26.03
+module load amd/7.0.2
+module load rocm/7.0.2
+module load craype-accel-amd-gfx90a
+module load craype-x86-trento
+module load cray-mpich/9.1.0
+module load hdf5/1.14.6-mpi
+
+export LD_LIBRARY_PATH=${CRAY_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}
+export OMP_PROC_BIND=spread 
+export OMP_PLACES=threads
+export HSA_XNACK=1
+export MPICH_GPU_SUPPORT_ENABLED=1
+
