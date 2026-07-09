@@ -1,14 +1,3 @@
-#ifndef HYDROEXA_ROESOLVER_H
-#define HYDROEXA_ROESOLVER_H
-
-#include <AMReX_REAL.H>
-#include <AMReX_Math.H>
-#include <cmath>
-
-#include <hydroexa/Constants.H>
-
-using namespace amrex;
-
 AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 void roeSolver(
     Real hi, Real hui, Real hvi, Real zi, Real ni,
@@ -236,4 +225,7 @@ void roeSolver(
 }
 
 
-#endif
+AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+Real compute_timestep() {
+    
+}
