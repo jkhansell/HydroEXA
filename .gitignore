@@ -19,6 +19,8 @@ plt*
 **/[Ii]nstall*/
 **/[Bb]acktrace.0
 **/[Ee]rr.log
+**/*.h5
+tests/**/*.png
 
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

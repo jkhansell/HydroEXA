@@ -6,8 +6,6 @@
 #include <cmath>
 
 #include <utils/Constants.H>
-
-#include <state/AmrMeshState.H>
 #include <solvers/BaseSolver.H>
 #include <solvers/kernels/Roe.H>
 

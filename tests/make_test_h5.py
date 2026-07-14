@@ -5,7 +5,7 @@ import numpy as np
 # DOMAIN SETUP
 # ============================================================
 Lx, Ly = 15000.0, 5000.0
-dx, dy = 10.0, 10.0
+dx, dy = 5.0, 5.0
 
 x = np.arange(0, Lx, dx)
 y = np.arange(0, Ly, dy)
@@ -44,8 +44,8 @@ hv_fluid = np.zeros_like(h_fluid)
 # ============================================================
 # APPLY IRREGULAR NODATA BOUNDARY PRUNING
 # ============================================================
-nodata_value = -9999.0
-mask_width = 1800.0 
+nodata_value = np.nan
+mask_width = 700.0 
 prune_mask = np.abs(distance) > mask_width
 
 # Prune Bathymetry

@@ -7,239 +7,379 @@
 
 // AMReX includes
 #include <AMReX_ParallelDescriptor.H>
+#include <AMReX_PlotFileUtil.H>
 
-// local includes 
+// local includes
 #include <io/IOHandler.H>
 
-void IOHandler::ReadHDF5Hyperslab(amrex::Array4<amrex::Real> const& arr, 
-                                  const amrex::Box& bx, 
-                                  const std::string& hdf5_filename,
-                                  const std::string& dataset_name,
-                                  int dst_comp) 
+void IOHandler::ReadHDF5Hyperslab(
+    amrex::Array4<amrex::Real> const &arr,
+    const amrex::Box &bx,
+    const std::string &dataset_name,
+    int dst_comp)
 {
-    // i_lo, j_lo, nx, ny represent what AMReX allocated for this tile
     const int i_lo = bx.smallEnd(0);
     const int j_lo = bx.smallEnd(1);
-    const int nx   = bx.length(0);
-    const int ny   = bx.length(1);
+    const int nx = bx.length(0);
+    const int ny = bx.length(1);
 
-    // 1. Query HDF5 to find the exact matrix bounds inside the file
-    hid_t plist_id = H5Pcreate(H5P_FILE_ACCESS);
-    H5Pset_fapl_mpio(plist_id, amrex::ParallelDescriptor::Communicator(), MPI_INFO_NULL);
-    hid_t file_id = H5Fopen(hdf5_filename.c_str(), H5F_ACC_RDONLY, plist_id);
-    H5Pclose(plist_id);
+    DatasetInfo &ds = hdf5_reader->Dataset(dataset_name);
 
-    hid_t dataset_id = H5Dopen2(file_id, dataset_name.c_str(), H5P_DEFAULT);
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(ds.ndims == 2, "ReadHDF5Hyperslab() expects a 2D dataset.");
+
+    const int h5_nx = ds.nx;
+    const int h5_ny = ds.ny;
+
+    hid_t dataset_id = ds.dataset;
     hid_t filespace_id = H5Dget_space(dataset_id);
-    int file_ndims = H5Sget_simple_extent_ndims(filespace_id);
-    hsize_t file_dims[3] = {0, 0, 0};
-    H5Sget_simple_extent_dims(filespace_id, file_dims, NULL);
 
-    int h5_ny = (file_ndims == 3) ? static_cast<int>(file_dims[1]) : static_cast<int>(file_dims[0]);
-    int h5_nx = (file_ndims == 3) ? static_cast<int>(file_dims[2]) : static_cast<int>(file_dims[1]);
+    amrex::Box file_box(amrex::IntVect(0, 0), amrex::IntVect(h5_nx - 1, h5_ny - 1));
+    amrex::Box valid_box = bx & file_box;
 
-    // 2. Define a bounding box representing the valid HDF5 file content bounds
-    amrex::Box file_box(amrex::IntVect(0,0), amrex::IntVect(h5_nx - 1, h5_ny - 1));
+    // Allocate without initializing with NAN. The kernel handles bounds checking.
+    amrex::Gpu::PinnedVector<amrex::Real> host_buffer(nx * ny);
 
-    // 3. Compute the geometric intersection using AMReX's built-in & operator
-    amrex::Box valid_intersect_box = bx & file_box;
-
-    // Create a host buffer that matches the exact shape AMReX allocated (including padding)
-    const amrex::Real nodata_val = -9999.0;
-    amrex::Gpu::PinnedVector<amrex::Real> host_buffer(nx * ny, nodata_val);
-
-    if (valid_intersect_box.ok()) // True if this rank owns data inside the file bounds
+    if (valid_box.ok())
     {
-        // Dimensions of the valid chunk we are about to read
-        int read_nx = valid_intersect_box.length(0);
-        int read_ny = valid_intersect_box.length(1);
+        const int read_nx = valid_box.length(0);
+        const int read_ny = valid_box.length(1);
 
-        hsize_t offset[3] = {0, 0, 0};
-        hsize_t count[3]  = {1, 1, 1};
-        hsize_t mem_dims[3] = {1, 1, 1};
+        hsize_t file_offset[2] = {
+            static_cast<hsize_t>(valid_box.smallEnd(1)),
+            static_cast<hsize_t>(valid_box.smallEnd(0))};
 
-        if (file_ndims == 3) {
-            offset[0] = static_cast<hsize_t>(dst_comp);
-            offset[1] = static_cast<hsize_t>(valid_intersect_box.smallEnd(1));
-            offset[2] = static_cast<hsize_t>(valid_intersect_box.smallEnd(0));
-            count[1]  = static_cast<hsize_t>(read_ny);
-            count[2]  = static_cast<hsize_t>(read_nx);
-            mem_dims[1] = count[1]; mem_dims[2] = count[2];
-        } else {
-            offset[0] = static_cast<hsize_t>(valid_intersect_box.smallEnd(1));
-            offset[1] = static_cast<hsize_t>(valid_intersect_box.smallEnd(0));
-            count[0]  = static_cast<hsize_t>(read_ny);
-            count[1]  = static_cast<hsize_t>(read_nx);
-            mem_dims[0] = count[0]; mem_dims[1] = count[1];
-        }
+        hsize_t count[2] = {
+            static_cast<hsize_t>(read_ny),
+            static_cast<hsize_t>(read_nx)};
 
-        H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, offset, NULL, count, NULL);
-        hid_t memspace_id = H5Screate_simple(file_ndims, mem_dims, NULL);
+        H5Sselect_hyperslab(
+            filespace_id,
+            H5S_SELECT_SET,
+            file_offset,
+            nullptr,
+            count,
+            nullptr);
 
-        // Read the continuous unpadded segment from HDF5 into a temporary buffer
-        amrex::Vector<amrex::Real> temp_buf(read_nx * read_ny);
-        hid_t datatype = (sizeof(amrex::Real) == 8) ? H5T_NATIVE_DOUBLE : H5T_NATIVE_FLOAT;
-        hid_t xfer_plist = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(xfer_plist, H5FD_MPIO_COLLECTIVE);
+        // Define the memory space layout to map directly into host_buffer
+        hsize_t mem_dims[2] = {
+            static_cast<hsize_t>(ny),
+            static_cast<hsize_t>(nx)};
 
-        H5Dread(dataset_id, datatype, memspace_id, filespace_id, xfer_plist, temp_buf.data());
+        hid_t memspace = H5Screate_simple(2, mem_dims, nullptr);
 
-        H5Pclose(xfer_plist);
-        H5Sclose(memspace_id);
+        hsize_t mem_offset[2] = {
+            static_cast<hsize_t>(valid_box.smallEnd(1) - j_lo),
+            static_cast<hsize_t>(valid_box.smallEnd(0) - i_lo)};
 
-        // Map the valid unpadded data points into our main host buffer layout
-        for (int j = valid_intersect_box.smallEnd(1); j <= valid_intersect_box.bigEnd(1); ++j) {
-            for (int i = valid_intersect_box.smallEnd(0); i <= valid_intersect_box.bigEnd(0); ++i) {
-                int temp_idx = (j - valid_intersect_box.smallEnd(1)) * read_nx + (i - valid_intersect_box.smallEnd(0));
-                int host_idx = (j - j_lo) * nx + (i - i_lo);
-                host_buffer[host_idx] = temp_buf[temp_idx];
-            }
-        }
-    }
-    else 
-    {
-        // MPI Collective requirement: Ranks completely inside the dead zone 
-        // must still participate in the collective H5Dread call.
-        H5Sselect_none(filespace_id);
-        hid_t memspace_id = H5Screate(H5S_NULL);
-        hid_t xfer_plist = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(xfer_plist, H5FD_MPIO_COLLECTIVE);
-        
-        amrex::Real dummy;
-        hid_t datatype = (sizeof(amrex::Real) == 8) ? H5T_NATIVE_DOUBLE : H5T_NATIVE_FLOAT;
-        H5Dread(dataset_id, datatype, memspace_id, filespace_id, xfer_plist, &dummy);
-        
-        H5Pclose(xfer_plist);
-        H5Sclose(memspace_id);
+        // Read directly into host_buffer at the correct offset
+        H5Sselect_hyperslab(
+            memspace,
+            H5S_SELECT_SET,
+            mem_offset,
+            nullptr,
+            count,
+            nullptr);
+
+        H5Dread(
+            dataset_id,
+            hdf5_reader->Datatype(),
+            memspace,
+            filespace_id,
+            hdf5_reader->TransferProperty(),
+            host_buffer.data());
+
+        H5Sclose(memspace);
     }
 
     H5Sclose(filespace_id);
-    H5Dclose(dataset_id);
-    H5Fclose(file_id);
 
-    // =====================================================================
-    // STEP B: GPU Mapping and Dynamic Padding Assignment
-    // =====================================================================
-    amrex::Real const* raw_host_ptr = host_buffer.data();
+    // Explicitly copy to device memory to avoid PCIe zero-copy latency in the kernel
+    amrex::Gpu::DeviceVector<amrex::Real> device_buffer(host_buffer.size());
+    amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, host_buffer.begin(), host_buffer.end(), device_buffer.begin());
 
-    // Launch the kernel across the entire allocated box 'bx' (including padding)
-    amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-    {
-        // 1. Is this cell outside the true physical domain of our HDF5 file?
-        if (i >= h5_nx || j >= h5_ny || i < 0 || j < 0) {
-            // Yes: Set it to a safe padding value (dry land or zero fluid height)
-            arr(i, j, k, dst_comp) = 0.0;
-        } 
-        else {
-            // No: This cell is inside the true domain. Fetch it from the buffer.
-            int flat_idx = (j - j_lo) * nx + (i - i_lo);
-            amrex::Real val = raw_host_ptr[flat_idx];
+    const amrex::Real *device_ptr = device_buffer.data();
 
-            if (amrex::Math::abs(val - nodata_val) < 1e-1) {
-                arr(i, j, k, dst_comp) = 0.0; // Handled nodata mask cells from python
-            } else {
-                arr(i, j, k, dst_comp) = val; // Valid interior simulation data
+    amrex::ParallelFor(
+        bx,
+        [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
+        {
+            if (i < 0 || j < 0 || i >= h5_nx || j >= h5_ny)
+            {
+                arr(i, j, k, dst_comp) = NAN;
             }
-        }
-    });
+            else
+            {
+                int idx = (j - j_lo) * nx + (i - i_lo);
+                arr(i, j, k, dst_comp) = device_ptr[idx];
+            }
+        });
 
     amrex::Gpu::streamSynchronize();
 }
 
-
-
-void IOHandler::ReadHDF5Metadata(const std::string& hdf5_path, 
-                                 const std::string& dataset_name, 
-                                 HDF5SpatialMetadata& meta)
+void IOHandler::ReadHDF5HyperslabComponents(
+    amrex::Array4<amrex::Real> const &arr,
+    const amrex::Box &bx,
+    const std::string &dataset_name,
+    int first_comp,
+    int ncomp)
 {
-    // Continuous length-8 broadcast payload
-    // Layout: [nx, ny, dx, dy, prob_lo_x, prob_lo_y, prob_hi_x, prob_hi_y]
+    const int i_lo = bx.smallEnd(0);
+    const int j_lo = bx.smallEnd(1);
+    const int nx = bx.length(0);
+    const int ny = bx.length(1);
+
+    DatasetInfo &ds = hdf5_reader->Dataset(dataset_name);
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(ds.ndims == 3, "ReadHDF5HyperslabComponents() expects a 3D dataset.");
+
+    const int h5_nx = ds.nx;
+    const int h5_ny = ds.ny;
+
+    hid_t dataset_id = ds.dataset;
+    hid_t filespace_id = H5Dget_space(dataset_id);
+
+    amrex::Box file_box(amrex::IntVect(0, 0), amrex::IntVect(h5_nx - 1, h5_ny - 1));
+    amrex::Box valid_box = bx & file_box;
+
+    // Remove the slow NAN initialization. Pinned allocation takes time, 
+    // but avoiding the initialization loop saves a massive amount of CPU time.
+    amrex::Gpu::PinnedVector<amrex::Real> host_buffer(nx * ny * ncomp);
+
+    if (valid_box.ok())
+    {
+        const int read_nx = valid_box.length(0);
+        const int read_ny = valid_box.length(1);
+
+        hsize_t file_offset[3] = {
+            static_cast<hsize_t>(first_comp),
+            static_cast<hsize_t>(valid_box.smallEnd(1)),
+            static_cast<hsize_t>(valid_box.smallEnd(0))};
+
+        hsize_t count[3] = {
+            static_cast<hsize_t>(ncomp),
+            static_cast<hsize_t>(read_ny),
+            static_cast<hsize_t>(read_nx)};
+
+        H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, file_offset, nullptr, count, nullptr);
+
+        // Define the memory space layout to map directly into host_buffer
+        hsize_t mem_dims[3] = {
+            static_cast<hsize_t>(ncomp),
+            static_cast<hsize_t>(ny),
+            static_cast<hsize_t>(nx)};
+            
+        hid_t memspace = H5Screate_simple(3, mem_dims, nullptr);
+
+        hsize_t mem_offset[3] = {
+            0,
+            static_cast<hsize_t>(valid_box.smallEnd(1) - j_lo),
+            static_cast<hsize_t>(valid_box.smallEnd(0) - i_lo)};
+
+        // Read directly into host_buffer at the correct offset
+        H5Sselect_hyperslab(memspace, H5S_SELECT_SET, mem_offset, nullptr, count, nullptr);
+
+        H5Dread(
+            dataset_id,
+            hdf5_reader->Datatype(),
+            memspace,
+            filespace_id,
+            hdf5_reader->TransferProperty(),
+            host_buffer.data());
+
+        H5Sclose(memspace);
+    }
+
+    H5Sclose(filespace_id);
+
+    // Transfer the data from pinned memory to device memory explicitly 
+    // to avoid extreme PCIe zero-copy bottlenecks during kernel execution.
+    amrex::Gpu::DeviceVector<amrex::Real> device_buffer(host_buffer.size());
+    amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, host_buffer.begin(), host_buffer.end(), device_buffer.begin());
+    
+    const amrex::Real *device_ptr = device_buffer.data();
+
+    amrex::ParallelFor(
+        bx,
+        ncomp,
+        [=] AMREX_GPU_DEVICE(int i, int j, int k, int n) noexcept
+        {
+            if (i < 0 || j < 0 || i >= h5_nx || j >= h5_ny)
+            {
+                arr(i, j, k, first_comp + n) = NAN;
+            }
+            else
+            {
+                int idx = n * nx * ny + (j - j_lo) * nx + (i - i_lo);
+                arr(i, j, k, first_comp + n) = device_ptr[idx];
+            }
+        });
+
+    amrex::Gpu::streamSynchronize();
+}
+
+void IOHandler::ReadHDF5Metadata(const std::string &dataset_name,
+                                 HDF5SpatialMetadata &meta)
+{
+    // Layout:
+    // [nx, ny, dx, dy, prob_lo_x, prob_lo_y, prob_hi_x, prob_hi_y]
     double global_payload[8] = {0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0};
 
-    // ---------------------------------------------------------
-    // STEP 1: IO Processor (Rank 0) parses file parameters
-    // ---------------------------------------------------------
     if (amrex::ParallelDescriptor::IOProcessor())
     {
-        hid_t file_id = H5Fopen(hdf5_path.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(file_id >= 0, "Failed to open HDF5 file.");
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(hdf5_reader, "HDF5Reader has not been initialized.");
 
-        hid_t dset_id = H5Dopen2(file_id, dataset_name.c_str(), H5P_DEFAULT);
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(dset_id >= 0, "Failed to open dataset.");
-
-        // Extract matrix dims
-        hid_t space_id = H5Dget_space(dset_id);
-        int ndims = H5Sget_simple_extent_ndims(space_id);
-        // ACCEPT EITHER 2D OR 3D DATASETS
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(ndims == 2 || ndims == 3, 
-            "Dataset is neither a 2D matrix nor a 3D multi-component stack!");
-        hsize_t dims[2];
-        H5Sget_simple_extent_dims(space_id, dims, NULL);
+        auto ds = hdf5_reader->Dataset(dataset_name);
         
-        // HDF5 Row-Major [Y][X] counts
-        double nx_val = static_cast<double>(dims[1]);
-        double ny_val = static_cast<double>(dims[0]);
+        hid_t dset_id = ds.dataset;
+        hid_t space_id = H5Dget_space(dset_id);
 
-        double dx = 1.0, dy = 1.0;
-        double x_ll = 0.0, y_ll = 0.0;
+        double dx = 1.0;
+        double x_ll = 0.0;
+        double dy = 1.0;
+        double y_ll = 0.0;
 
-        // Parse attributes
-        if (H5Aexists(dset_id, "dx") > 0) {
+        if (H5Aexists(dset_id, "dx") > 0)
+        {
             hid_t attr = H5Aopen(dset_id, "dx", H5P_DEFAULT);
             H5Aread(attr, H5T_NATIVE_DOUBLE, &dx);
             H5Aclose(attr);
         }
-        if (H5Aexists(dset_id, "dy") > 0) {
+
+        if (H5Aexists(dset_id, "dy") > 0)
+        {
             hid_t attr = H5Aopen(dset_id, "dy", H5P_DEFAULT);
             H5Aread(attr, H5T_NATIVE_DOUBLE, &dy);
             H5Aclose(attr);
-        } else {
+        }
+        else
+        {
             dy = dx;
         }
 
-        if (H5Aexists(dset_id, "x_ll") > 0) {
+        if (H5Aexists(dset_id, "x_ll") > 0)
+        {
             hid_t attr = H5Aopen(dset_id, "x_ll", H5P_DEFAULT);
             H5Aread(attr, H5T_NATIVE_DOUBLE, &x_ll);
             H5Aclose(attr);
         }
-        if (H5Aexists(dset_id, "y_ll") > 0) {
+
+        if (H5Aexists(dset_id, "y_ll") > 0)
+        {
             hid_t attr = H5Aopen(dset_id, "y_ll", H5P_DEFAULT);
             H5Aread(attr, H5T_NATIVE_DOUBLE, &y_ll);
             H5Aclose(attr);
         }
 
-        // Compute physical domain bounds
-        double prob_hi_x = x_ll + (nx_val * dx);
-        double prob_hi_y = y_ll + (ny_val * dy);
-
-        // Pack the entire structural layout sequentially
-        global_payload[0] = nx_val;
-        global_payload[1] = ny_val;
+        global_payload[0] = ds.nx;
+        global_payload[1] = ds.ny;
         global_payload[2] = dx;
         global_payload[3] = dy;
         global_payload[4] = x_ll;
         global_payload[5] = y_ll;
-        global_payload[6] = prob_hi_x;
-        global_payload[7] = prob_hi_y;
+        global_payload[6] = x_ll + ds.nx * dx;
+        global_payload[7] = y_ll + ds.ny * dy;
 
+        // This must still be closed; H5Dget_space() creates a new object.
         H5Sclose(space_id);
-        H5Dclose(dset_id);
-        H5Fclose(file_id);
     }
 
-    // ---------------------------------------------------------
-    // STEP 2: Single Unified Collective Broadcast
-    // ---------------------------------------------------------
-    int io_rank = amrex::ParallelDescriptor::IOProcessorNumber();
-    amrex::ParallelDescriptor::Bcast(global_payload, 8, io_rank);
+    amrex::ParallelDescriptor::Bcast(global_payload, 8,
+                                     amrex::ParallelDescriptor::IOProcessorNumber());
 
-    // Unpack variables back into the structural configuration object
     meta.global_nx = static_cast<int>(global_payload[0]);
     meta.global_ny = static_cast<int>(global_payload[1]);
-    meta.dx        = global_payload[2];
-    meta.dy        = global_payload[3];
+    meta.dx = global_payload[2];
+    meta.dy = global_payload[3];
     meta.prob_lo_x = global_payload[4];
     meta.prob_lo_y = global_payload[5];
     meta.prob_hi_x = global_payload[6];
     meta.prob_hi_y = global_payload[7];
+}
+
+void IOHandler::CloseHDF5()
+{
+    hdf5_reader.reset(); // closes the file immediately
+}
+
+void IOHandler::WritePlotfile(
+    const amrex::Vector<amrex::MultiFab> &U,
+    const amrex::Vector<amrex::MultiFab> &Terrain,
+    int iteration,
+    double time,
+    const amrex::Vector<amrex::Geometry> &geom,
+    const amrex::Vector<amrex::IntVect> &ref_ratio,
+    int finest_level)
+{
+    // 1. Safely calculate the TRUE number of active, fully allocated levels.
+    // This entirely prevents the "nullptr" gap segfault.
+    int num_active_levels = 0;
+    for (int lev = 0; lev <= finest_level; ++lev) {
+        // If a level's BoxArray hasn't been defined yet, we break out.
+        // We do NOT use 'continue', because AMReX requires contiguous level arrays.
+        if (U[lev].boxArray().empty() || Terrain[lev].boxArray().empty()) {
+            break; 
+        }
+        num_active_levels++;
+    }
+
+    if (num_active_levels == 0) {
+        amrex::Print() << "[IOHandler] Warning: No valid levels found. Skipping plotfile.\n";
+        return;
+    }
+
+    std::string plotfilename = amrex::Concatenate("plt", iteration, 5);
+    amrex::Print() << "[IOHandler] Initializing plotfile bundle output: " << plotfilename 
+                   << " with " << num_active_levels << " active levels.\n";
+
+    // 2. Set variable string descriptors safely
+    int ncomp_U = U[0].nComp();
+    int ncomp_Terrain = Terrain[0].nComp();
+    int total_comps = ncomp_U + ncomp_Terrain;
+
+    amrex::Vector<std::string> varnames;
+    varnames.push_back("h_fluid");
+    varnames.push_back("hu_momentum");
+    varnames.push_back("hv_momentum");
+    varnames.push_back("z_bathymetry");
+    
+    // SAFETY CATCH: If you ever change ncomps (e.g., adding roughness), 
+    // this prevents AMReX from crashing due to an out-of-bounds string read.
+    while (varnames.size() < total_comps) {
+        varnames.push_back("extra_comp_" + std::to_string(varnames.size()));
+    }
+
+    // 3. Set up pointers and temporary multi-component Fabs safely
+    amrex::Vector<const amrex::MultiFab *> output_mf(num_active_levels);
+    amrex::Vector<amrex::MultiFab> temp_mf(num_active_levels);
+
+    for (int lev = 0; lev < num_active_levels; ++lev)
+    {
+        // Allocate local temporary space tracking identical layout geometry
+        temp_mf[lev].define(U[lev].boxArray(), U[lev].DistributionMap(), total_comps, 0);
+
+        // Map components sequentially across memory block offsets
+        amrex::MultiFab::Copy(temp_mf[lev], U[lev],       0, 0,       ncomp_U,       0);
+        amrex::MultiFab::Copy(temp_mf[lev], Terrain[lev], 0, ncomp_U, ncomp_Terrain, 0);
+
+        // Guarantee a valid memory address is provided
+        output_mf[lev] = &temp_mf[lev];
+    }
+
+    // 4. Track local integer state steps matching AMReX criteria signatures
+    amrex::Vector<int> istep(num_active_levels, iteration);
+
+    // 5. Fire parallel output dump sequence
+    // Notice we pass the full, untouched `geom` and `ref_ratio` arrays. 
+    // AMReX handles `max_level` sized tracking arrays natively without issue.
+    amrex::WriteMultiLevelPlotfile(
+        plotfilename,
+        num_active_levels,
+        output_mf,
+        varnames,
+        geom,           
+        time,
+        istep,
+        ref_ratio);     
+
+    amrex::Print() << "[IOHandler] Plotfile write finalized cleanly on disk.\n";
 }

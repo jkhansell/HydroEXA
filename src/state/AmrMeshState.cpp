@@ -1,10 +1,3 @@
-#include <AMReX_ParallelDescriptor.H>
-#include <AMReX_ParmParse.H>
-#include <AMReX_MultiFabUtil.H>
-#include <AMReX_FillPatchUtil.H>
-#include <AMReX_PlotFileUtil.H>
-#include <AMReX_VisMF.H>
-#include <AMReX_PhysBCFunct.H>
 
 
 #include <state/AmrMeshState.H>
@@ -12,9 +5,13 @@
 
 
 AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
-                           int terrain_static_terrain_lev, 
-                           HDF5SpatialMetadata& meta, 
-                           std::string input, 
+                           int terrain_ref_lev, 
+                           HDF5SpatialMetadata& meta,
+                           std::string input,
+                           RuntimeParameters runtime_params,
+                           IOParameters io_params,
+                           AMRParameters amr_params,
+                           PhysicsParameters physics_params,
                            /*AmrCore params*/
                            const amrex::RealBox& rb, 
                            int max_level_in,
@@ -23,20 +20,20 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
                            const amrex::Vector<amrex::IntVect>& ref_ratios)
     : amrex::AmrCore(&rb, max_level_in, n_cell_in, coord, ref_ratios),
       IO(io_handler),
-      static_terrain_lev(terrain_static_terrain_lev), 
+      static_terrain_lev(terrain_ref_lev), 
       metadata(meta), 
       hdf5_path(input),
       ncomp_U(3),
       ngrow_U(1),
-      ncomp_Terrain(2),
-      ngrow_Terrain(0)
+      ncomp_Terrain(1),
+      ngrow_Terrain(1), 
+      runtime_p(runtime_params), 
+      io_p(io_params), 
+      amr_p(amr_params), 
+      physics_p(physics_params) 
 {
-    // At this point, the base grids are structured natively by AMReX!
-    // We can explicitly tune performance boundaries from the safety of the constructor body.
-    this->SetMaxGridSize(64);
-    this->SetBlockingFactor(8);
-
     // 2. Resize containers dynamically
+    ResizeLevels(max_level + 1); // Resizes all variables
     U_bcs.resize(ncomp_U);
     Terrain_bcs.resize(ncomp_Terrain);
 
@@ -70,180 +67,8 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
             Terrain_bcs[comp].setHi(idim, amrex::BCType::foextrap);
         }
     }
-
 }
 
-
-void AmrMeshState::Initialize() {
-    if (restart_chkfile == "") {
-        // start simulation from the beginning
-        const amrex::Real time = 0.0;
-
-        InitializeStaticTerrain();
-        InitFromScratch(time); // Calls PostProcessBaseGrids to prune the mesh using NODATA
-        PostInit(); // Post Init Routine to fill lev < static_terrain_lev
-        
-        amrex::Print() << "[STUB] Skipping checkpoint write.\n";
-    }
-    else {
-        amrex::Print() << "[STUB] Skipping checkpoint read.\n";
-    }
-
-    amrex::Print() << "[STUB] Skipping plotfile write.\n";
-}
-
-void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
-{
-    amrex::Print() << "[DEBUG PRUNE] Intercepting Level 0 layout to prune inactive NODATA zones on the GPU.\n";
-    
-    int scale_factor = 1 << static_terrain_lev; 
-    amrex::IntVect ref_ratio_vect(AMREX_D_DECL(scale_factor, scale_factor, 1));
-
-    amrex::BoxList active_list;
-    const amrex::Real nodata_val = -9999.0;
-
-    // Loop through every candidate Level 0 box AMReX wants to generate
-    for (int b = 0; b < box_array.size(); ++b)
-    {
-        const amrex::Box& coarse_box = box_array[b];
-
-        // Project the coarse index coordinates up to the fine file-resolution bounds
-        amrex::Box fine_inspection_window = amrex::refine(coarse_box, ref_ratio_vect);
-
-        // Define a safe local tracker element
-        int local_box_contains_valid_data = 0;
-
-        // Iterate over local chunks of the persistent StaticTerrain MultiFab
-        for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
-        {
-            const amrex::Box& valid_patch = mfi.validbox();
-            
-            // STRICT GRID ACCESSIBILITY SAFE GUARD: Only look at intersections
-            // that are completely guaranteed to belong to this rank's local memory block allocation!
-            amrex::Box safe_intersection = fine_inspection_window & valid_patch;
-
-            if (!safe_intersection.isEmpty())
-            {
-                // Retrieve the device view
-                auto const& terrain_arr = StaticTerrain.const_array(mfi);
-
-                amrex::ReduceOps<amrex::ReduceOpMax> reduce_op;
-                amrex::ReduceData<int> reduce_data(reduce_op);
-                using ReduceTuple = decltype(reduce_data)::Type;
-
-                // Fire the reduction loop strictly bound to the safe_intersection box coordinates
-                reduce_op.eval(safe_intersection, reduce_data,
-                [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept -> ReduceTuple
-                {
-                    amrex::Real val = terrain_arr(i, j, k, 0);
-                    
-                    if (!isnan(val) && amrex::Math::abs(val - nodata_val) > 1e-1) {
-                        return 1;
-                    }
-                    return 0;
-                });
-
-                ReduceTuple local_tuple = reduce_data.value(); // Safely blocks and downloads value
-                if (amrex::get<0>(local_tuple) > 0) {
-                    local_box_contains_valid_data = 1;
-                }
-            }
-        }
-
-        // Coordinate Cross-Rank Parallel Synchronization across the entire communicator
-        int global_keep = local_box_contains_valid_data;
-        amrex::ParallelDescriptor::ReduceIntMax(global_keep);
-
-        if (global_keep > 0) {
-            active_list.push_back(coarse_box); // Keep the box
-        } else {
-            amrex::Print() << "             [PRUNE] Dropped entirely inactive mountain/ocean box: " << coarse_box << "\n";
-        }
-    }
-
-    // Update AMReX's original grid layout arrays with our pruned structure list
-    amrex::Print() << "[DEBUG PRUNE DONE] Original box count: " << box_array.size() 
-                   << " | Pruned active box count: " << active_list.size() << "\n";
-
-    // ... [Previous Pruning logic inside PostProcessBaseGrids] ...
-
-    if (active_list.isEmpty()) {
-        amrex::Print() << "\n=========================================================================\n"
-                       << "!!! CRITICAL WARNING: Every single grid box was pruned away!           !!!\n"
-                       << "=========================================================================\n\n";
-    } else {
-        // 1. Safe to overwrite the in-place BoxArray reference parameter
-        box_array = amrex::BoxArray(std::move(active_list));
-
-        // 2. REBUILD Parent AmrCore/AmrMesh DM for Level 0 directly!
-        // This synchronizes the base class dmap vector array with our pruned topology.
-        // We look at level 0 because this hook specifically processes the base grids.
-        int lev = 0; 
-        
-        // Use const_cast because PostProcessBaseGrids is marked as a 'const' method,
-        // but we explicitly need to update our own core structural mapping parameters.
-        auto* non_const_this = const_cast<AmrMeshState*>(this);
-        
-        // Re-generate a balanced layout map and save it into the parent's dmap collection
-        non_const_this->SetDistributionMap(lev, amrex::DistributionMapping(box_array));
-        
-        amrex::Print() << "[DEBUG PRUNE] Successfully reset parent AmrCore Level 0 DistributionMapping.\n";
-    }
-}
-
-void AmrMeshState::PostInit() {
-    amrex::Print() << "[DEBUG INIT] Executing unified PostInit down-averaging sweeps.\n";
-
-    // Cascade downward from our known high-resolution file anchor down to Level 0
-    for (int lev = static_terrain_lev - 1; lev >= 0; --lev) {
-        amrex::Print() << "             Averaging Level " << lev+1 << " -> Level " << lev << "\n";
-        
-        // Down-sample Fluid State variables (Enforces absolute conservation of mass and momentum)
-        amrex::average_down(U_new[lev+1], U_new[lev],
-                            geom[lev+1], geom[lev],
-                            0, U_new[lev].nComp(), refRatio(lev));
-
-        // Down-sample Topography features (Enforces exact volumetric grid matching)
-        amrex::average_down(DynamicTerrain[lev+1], DynamicTerrain[lev],
-                            geom[lev+1], geom[lev],
-                            0, DynamicTerrain[lev].nComp(), refRatio(lev));
-    }
-    amrex::Print() << "[DEBUG INIT] PostInit complete. Full mesh tree is synchronized.\n";
-}
-
-void AmrMeshState::InitializeStaticTerrain() {
-
-    amrex::IntVect dom_lo(AMREX_D_DECL(0, 0, 0));
-    amrex::IntVect dom_hi(AMREX_D_DECL(metadata.global_nx - 1, metadata.global_ny - 1, 0));
-    amrex::Box domain(dom_lo, dom_hi);
-
-    // If your AMR Geometry was initialized blindly, you should ensure Geom(2) 
-    // matches this exact bounding box to prevent ParallelCopy misalignments.
-    // e.g., SetGeometryBase(global_domain, physical_real_box);
-
-    // 4. Distribute the newly discovered global domain evenly
-    static_ba.define(domain);
-
-    // 1024x1024 chunks for lean MPI routing (IDK if this would work for interpolation we'll need to 
-    // test it, but it should be fine for the initial conditions 
-    // since we read them in at the finest level and then average down)
-    static_ba.maxSize(128); 
-
-    static_dm.define(static_ba);
-    StaticTerrain.define(static_ba, static_dm, ncomp_Terrain, 0); // No ghost cells for static terrain
-
-    // 5. Finally, execute the parallel hyperslab readers we wrote earlier.
-    // Every rank now confidently knows its coordinates are within the true file bounds.
-    for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
-    {
-        const amrex::Box& bx = mfi.validbox();
-        auto const& z_arr = StaticTerrain.array(mfi);
-        
-        IO->ReadHDF5Hyperslab(z_arr, bx, hdf5_path, "bathymetry"); 
-    }
-
-    amrex::Print() << "[DEBUG INIT] Standalone StaticTerrain MultiFab successfully loaded.\n";
-}
 
 void AmrMeshState::ResizeLevels(int nlevs) {
     U_new.resize(nlevs);
@@ -257,76 +82,368 @@ void AmrMeshState::ResizeLevels(int nlevs) {
     flux_reg.resize(nlevs);
 }
 
+
+void AmrMeshState::Initialize() {
+    amrex::Real time = 0.0;
+    int initial_step = 0;
+
+    if (restart_chkfile == "") {
+        // start simulation from the beginning
+
+        amrex::Print() << "FINEST LEVEL: " << finest_level << " MAX_LEVEL: "<< max_level <<  "\n";
+        InitializeTerrainFluid();
+        InitFromScratch(time); // Calls PostProcessBaseGrids to prune the mesh using NODATA
+        //PostInit(); // Post Init Routine to fill lev < static_terrain_lev
+        amrex::Print() << "FINEST LEVEL: " << finest_level << " MAX_LEVEL: "<< max_level <<  "\n";
+
+        // deallocating initial static fluid MultiFab pointer since we         
+        // already allocated the initial DynamicFluid Multifab and now refinement or coarsening 
+        // is tackled by physics
+        StaticFluid.reset();
+   
+        amrex::Print() << "[STUB] Skipping checkpoint write.\n";
+    }
+    else {
+        amrex::Print() << "[STUB] Skipping checkpoint read.\n";
+    }
+
+    // --- DIAGNOSTICS START ---
+    amrex::Print() << "\n[DIAGNOSTIC] --- Level 0 Status ---\n";
+    amrex::Print() << "[DIAGNOSTIC] U_new size (number of levels): " << U_new.size() << "\n";
+    
+    if (U_new.size() > 0) {
+        amrex::Print() << "[DIAGNOSTIC] U_new[0] empty(): " << (U_new[0].empty() ? "YES" : "NO") << "\n";
+        amrex::Print() << "[DIAGNOSTIC] U_new[0] BoxArray size (number of boxes): " << U_new[0].boxArray().size() << "\n";
+        
+        // Let's check DynamicTerrain too just in case
+        amrex::Print() << "[DIAGNOSTIC] DynamicTerrain[0] empty(): " << (U_new[0].empty() ? "YES" : "NO") << "\n";
+        amrex::Print() << "[DIAGNOSTIC] DynamicTerrain[0] BoxArray size (number of boxes): " << U_new[0].boxArray().size() << "\n";
+    }
+    // --- DIAGNOSTICS END ---
+
+    IO->WritePlotfile(
+        U_new, DynamicTerrain, 
+        initial_step, time, 
+        Geom(), refRatio(), 
+        finest_level
+    );
+}
+
+
+void AmrMeshState::InitializeTerrainFluid() {
+
+    amrex::IntVect dom_lo(AMREX_D_DECL(0, 0, 0));
+    amrex::IntVect dom_hi(AMREX_D_DECL(metadata.global_nx - 1, metadata.global_ny - 1, 0));
+    amrex::Box domain(dom_lo, dom_hi);
+
+    // 1. Define the dedicated Geometry for the Static Terrain.
+    // We borrow the physical bounding box (RealBox), coordinate system, 
+    // and periodicity from the base AMR level (Level 0) so they perfectly align in physical space.
+    amrex::RealBox rb = Geom(0).ProbDomain();
+    int coord = Geom(0).Coord();
+    amrex::Array<int, AMREX_SPACEDIM> is_per = Geom(0).isPeriodic();
+    
+    static_geom.define(domain, rb, coord, is_per);
+
+    // 2. Distribute the newly discovered global domain evenly
+    static_ba.define(domain);
+
+    // 1024x1024 chunks for lean MPI routing (128 is a good max size for testing)
+    static_ba.maxSize(1024); 
+
+    static_dm.define(static_ba);
+    
+    // 3. Allocate the MultiFab
+    StaticTerrain.define(static_ba, static_dm, ncomp_Terrain, 1); // No ghost cells for static terrain
+    
+    // we make this a dynamic pointer so that we can release after initialization
+    StaticFluid = std::make_unique<amrex::MultiFab>(static_ba, static_dm, ncomp_U, 1); // No ghost cells for static terrain
+
+    // 4. Execute the parallel hyperslab readers
+    for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
+    {
+        const amrex::Box& bx = mfi.validbox();
+        auto const& z_arr = StaticTerrain.array(mfi);
+        auto const& u_arr = StaticFluid->array(mfi);
+        
+        IO->ReadHDF5Hyperslab(z_arr, bx, "bathymetry", 0); 
+        IO->ReadHDF5HyperslabComponents(u_arr, bx, "fluid", 0, ncomp_U);
+    }
+
+    StaticTerrain.FillBoundary(static_geom.periodicity());
+    
+    StaticFluid->FillBoundary(static_geom.periodicity());
+
+    amrex::Print() << "[DEBUG INIT] Standalone StaticTerrain MultiFab successfully loaded.\n";
+}
+
+void AmrMeshState::TerrainMapStaticToDynamic(int lev)
+{
+    amrex::MultiFab& amr_mf = DynamicTerrain[lev];
+    
+    amr_mf.setVal(NAN);
+
+    const amrex::Geometry& amr_geom = geom[lev];
+    
+    // 2. Static is Finer than AMR: Restrict (Average Down)
+    if (static_terrain_lev > lev) 
+    {
+        amrex::IntVect ratio;
+        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+            ratio[idim] = static_cast<int>(std::round(amr_geom.CellSize(idim) / static_geom.CellSize(idim)));
+        }
+        
+        // Use the Geometry-aware 7-argument overload that natively bridges mismatched BoxArrays
+        amrex::average_down(StaticTerrain, amr_mf, 
+                            static_geom, amr_geom, 
+                            0, ncomp_Terrain, ratio);
+    } 
+    
+    // 3. Static is Coarser than AMR: Prolongate (Interpolate from the custom standalone layer)
+    else 
+    {
+        amrex::IntVect ratio;
+        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+            ratio[idim] = static_cast<int>(std::round(static_geom.CellSize(idim) / amr_geom.CellSize(idim)));
+        }
+
+        amrex::Real dummy_time = 0.0;
+
+        amrex::Interpolater* mapper = &amrex::cell_cons_interp;
+
+        if (amrex::Gpu::inLaunchRegion())
+        {
+            // Set up hardware-agnostic boundary functions using your EmptyFill approach
+            amrex::GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
+            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> cphysbc(static_geom, Terrain_bcs, gpu_bndry_func);
+            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> fphysbc(amr_geom,    Terrain_bcs, gpu_bndry_func);
+
+            // 15-argument standard compiler-compliant call
+            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
+                                         static_geom, amr_geom,
+                                         cphysbc, 0, fphysbc, 0, ratio,
+                                         mapper, Terrain_bcs, 0);
+        }
+        else
+        {
+
+            // Host CPU equivalent mapping path
+            amrex::CpuBndryFuncFab bndry_func(nullptr);
+            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> cphysbc(static_geom, Terrain_bcs, bndry_func);
+            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> fphysbc(amr_geom,    Terrain_bcs, bndry_func);
+
+            // 15-argument standard compiler-compliant call
+            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
+                                         static_geom, amr_geom,
+                                         cphysbc, 0, fphysbc, 0, ratio,
+                                         mapper, Terrain_bcs, 0);
+        }
+    }
+
+    amr_mf.FillBoundary(geom[lev].periodicity());
+}
+
+void AmrMeshState::FluidMapStaticToDynamic(int lev)
+{
+    amrex::MultiFab& amr_mf = U_new[lev];
+    
+    amr_mf.setVal(NAN);
+
+    const amrex::Geometry& amr_geom = geom[lev];
+    
+    // 2. Static is Finer than AMR: Restrict (Average Down)
+    if (static_terrain_lev > lev) 
+    {
+        amrex::IntVect ratio;
+        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+            ratio[idim] = static_cast<int>(std::round(amr_geom.CellSize(idim) / static_geom.CellSize(idim)));
+        }
+        
+        // Use the Geometry-aware 7-argument overload that natively bridges mismatched BoxArrays
+        amrex::average_down(*StaticFluid, amr_mf, 
+                            static_geom, amr_geom, 
+                            0, ncomp_U, ratio);
+    } 
+    
+    // 3. Static is Coarser than AMR: Prolongate (Interpolate from the custom standalone layer)
+    else 
+    {
+        amrex::IntVect ratio;
+        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+            ratio[idim] = static_cast<int>(std::round(static_geom.CellSize(idim) / amr_geom.CellSize(idim)));
+        }
+
+        amrex::Real dummy_time = 0.0;
+
+        amrex::Interpolater* mapper = &amrex::cell_cons_interp;
+
+        if (amrex::Gpu::inLaunchRegion())
+        {
+            // Set up hardware-agnostic boundary functions using your EmptyFill approach
+            amrex::GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
+            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> cphysbc(static_geom, U_bcs, gpu_bndry_func);
+            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> fphysbc(amr_geom,    U_bcs, gpu_bndry_func);
+
+            // 15-argument standard compiler-compliant call
+            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, *StaticFluid, 0, 0, ncomp_U,
+                                         static_geom, amr_geom,
+                                         cphysbc, 0, fphysbc, 0, ratio,
+                                         mapper, U_bcs, 0);
+        }
+        else
+        {
+
+            // Host CPU equivalent mapping path
+            amrex::CpuBndryFuncFab bndry_func(nullptr);
+            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> cphysbc(static_geom, U_bcs, bndry_func);
+            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> fphysbc(amr_geom,    U_bcs, bndry_func);
+
+            // 15-argument standard compiler-compliant call
+            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, *StaticFluid, 0, 0, ncomp_U,
+                                         static_geom, amr_geom,
+                                         cphysbc, 0, fphysbc, 0, ratio,
+                                         mapper, U_bcs, 0);
+        }
+    }
+
+    amr_mf.FillBoundary(geom[lev].periodicity());
+}
+
+
 void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time, 
                                            const amrex::BoxArray& ba, 
                                            const amrex::DistributionMapping& dm) 
 {
-    amrex::Print() << "[DEBUG MakeNewLevelFromScratch] Entered Function.\n";
-
-    // CRITICAL GUARD: If pruning dropped all boxes, ba.size() is 0.
-    // Standard level initializations cannot allocate over empty layouts.
-    if (ba.empty() || ba.size() == 0) {
-        amrex::Print() << "[WARNING LEVEL " << lev 
-                       << "] No active grid patches remain after post-process pruning! Skipping allocation.\n";
-        return; 
-    }
-
-    // Allocate current AMR tier MultiFabs
+    // 1. Always allocate the MultiFabs for this level
     U_new[lev].define(ba, dm, ncomp_U, ngrow_U);
+    U_old[lev].define(ba, dm, ncomp_U, ngrow_U);
     DynamicTerrain[lev].define(ba, dm, ncomp_Terrain, ngrow_Terrain);
 
-    amrex::Print() << "[DEBUG MakeNewLevelFromScratch] Defined MultiFabs\n";
+    t_new[lev] = time;
+    t_old[lev] = time - 1.e200;
 
-    // -------------------------------------------------------------------------
-    // STEP 2: Terrain Mapping Operations
-    // -------------------------------------------------------------------------
-    if (lev == static_terrain_lev) {
-        // ParallelCopy brings data over from our standalone StaticTerrain MultiFab
-        DynamicTerrain[lev].ParallelCopy(StaticTerrain, 0, 0, ncomp_Terrain);
-    } 
-    else if (lev < static_terrain_lev) {
-        DynamicTerrain[lev].setVal(0.0); // Handled by a downstream average_down pass later
-    } 
-    else {
-        // Interpolate down from immediate parent
-        FillCoarsePatch(lev, time, DynamicTerrain[lev], Terrain_bcs, 0, ncomp_Terrain);
-    }
+    TerrainMapStaticToDynamic(lev);
+    FluidMapStaticToDynamic(lev);
 
-    amrex::Print() << "[DEBUG MakeNewLevelFromScratch] After FillCoarsePatch\n";
-
-
-    // -------------------------------------------------------------------------
-    // STEP 3: Data-Driven Fluid Mapping (h, hu, hv)
-    // -------------------------------------------------------------------------
-    if (lev == static_terrain_lev) {
-        // Every process reads its designated subdomain tile directly from the HDF5 file
-        for (amrex::MFIter mfi(U_new[lev]); mfi.isValid(); ++mfi)
-        {
-            const amrex::Box& bx = mfi.validbox();
-            auto const& u_arr = U_new[lev].array(mfi);
-            
-            // Read dataset "fluid_h" from the file directly into Component 0 (h)
-            IO->ReadHDF5Hyperslab(u_arr, bx, hdf5_path, "fluid", 0); 
-            
-            // Read momentum components into Component 1 (hu) and Component 2 (hv)
-            IO->ReadHDF5Hyperslab(u_arr, bx, hdf5_path, "fluid", 1); 
-            IO->ReadHDF5Hyperslab(u_arr, bx, hdf5_path, "fluid", 2); 
-        }
-    } 
-    else if (lev < static_terrain_lev) {
-        // Coarser tiers are initialized to zero. They will be filled via average_down
-        // once the reference data level finishes loading.
-        U_new[lev].setVal(0.0);
-    } 
-    else {
-        // Sub-grid fine tiers: Since AMReX initializes from level 0 upwards,
-        // the parent level (lev-1) is guaranteed to be fully configured.
-        FillCoarsePatch(lev, time, U_new[lev], U_bcs, 0, ncomp_U);
-    }
-
-    amrex::Print() << "[DEBUG INIT] Level " << lev << " Fluid & Terrain States Initialized.\n";
+    amrex::Print() << "[DEBUG] Level " << lev << " fully initialized without CoarsePatch dependency.\n";
 }
 
+
+void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
+{
+    amrex::Print() << "[DEBUG PRUNE] Intercepting Level 0 layout via physical geometry mapping.\n";
+    
+    const int num_boxes = box_array.size();
+    
+    // Trackers for MPI reduction
+    std::vector<int> has_valid_flags(num_boxes, 0);
+    std::vector<int> has_nan_flags(num_boxes, 0);
+
+    // Grab Level 0 spatial coordinate metrics
+    const auto& geom_lev0 = Geom(0);
+    const amrex::Real* dx_lev0 = geom_lev0.CellSize();
+    const amrex::Real* prob_lo = geom_lev0.ProbLo();
+
+    // HDF5 File spacing attributes matching your Python initialization script
+    const double hdf5_dx = metadata.dx;
+    const double hdf5_dy = metadata.dy;
+
+    for (int b = 0; b < num_boxes; ++b)
+    {
+        const amrex::Box& coarse_box = box_array[b];
+
+        // 1. Compute the exact physical coordinates bounding this candidate box
+        amrex::Real box_lo_x = prob_lo[0] + coarse_box.smallEnd(0) * dx_lev0[0];
+        amrex::Real box_hi_x = prob_lo[0] + (coarse_box.bigEnd(0) + 1) * dx_lev0[0];
+        amrex::Real box_lo_y = prob_lo[1] + coarse_box.smallEnd(1) * dx_lev0[1];
+        amrex::Real box_hi_y = prob_lo[1] + (coarse_box.bigEnd(1) + 1) * dx_lev0[1];
+
+        // 2. Map these physical coordinates to the HDF5 matrix row/column index bounds
+        int hdf5_i_lo = static_cast<int>(box_lo_x / hdf5_dx);
+        int hdf5_i_hi = static_cast<int>(box_hi_x / hdf5_dx) - 1;
+        int hdf5_j_lo = static_cast<int>(box_lo_y / hdf5_dy);
+        int hdf5_j_hi = static_cast<int>(box_hi_y / hdf5_dy) - 1;
+
+        int file_scale = metadata.global_nx / (geom_lev0.Domain().length(0) * (1 << static_terrain_lev));
+        if (file_scale > 1) {
+            hdf5_i_lo *= file_scale;
+            hdf5_i_hi *= file_scale;
+            hdf5_j_lo *= file_scale;
+            hdf5_j_hi *= file_scale;
+        }
+
+        // Create a Box matching the file's index space resolution
+        amrex::Box file_space_window(
+            amrex::IntVect(hdf5_i_lo, hdf5_j_lo),
+            amrex::IntVect(hdf5_i_hi, hdf5_j_hi)
+        );
+
+        int box_has_valid = 0;
+        int box_has_nan   = 0;
+
+        // 4. Look up intersections with the local patches of your loaded StaticTerrain array
+        for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
+        {
+            const amrex::Box& valid_patch = mfi.validbox();
+            amrex::Box safe_intersection = file_space_window & valid_patch;
+
+            if (!safe_intersection.isEmpty())
+            {
+                auto const& terrain_arr = StaticTerrain.const_array(mfi);
+                
+                // Simultaneously check for ANY valid cells AND ANY NaN cells
+                amrex::ReduceOps<amrex::ReduceOpMax, amrex::ReduceOpMax> reduce_op;
+                amrex::ReduceData<int, int> reduce_data(reduce_op);
+                using ReduceTuple = decltype(reduce_data)::Type;
+
+                reduce_op.eval(safe_intersection, reduce_data,
+                [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept -> ReduceTuple
+                {
+                    amrex::Real val = terrain_arr(i, j, k, 0);
+                    int is_valid = !std::isnan(val) ? 1 : 0;
+                    int is_nan   =  std::isnan(val) ? 1 : 0;
+                    return {is_valid, is_nan};
+                });
+
+                ReduceTuple local_tuple = reduce_data.value();
+                box_has_valid = std::max(box_has_valid, amrex::get<0>(local_tuple));
+                box_has_nan   = std::max(box_has_nan, amrex::get<1>(local_tuple));
+            }
+        }
+        
+        has_valid_flags[b] = box_has_valid;
+        has_nan_flags[b]   = box_has_nan;
+    }
+
+    // 5. Global MPI Synchronization
+    amrex::ParallelDescriptor::ReduceIntMax(has_valid_flags.data(), num_boxes);
+    amrex::ParallelDescriptor::ReduceIntMax(has_nan_flags.data(), num_boxes);
+
+    // 6. Build final BoxArray and categorize the surviving box indices 1:1
+    amrex::BoxList active_list;
+    
+    // Clear out class member vectors (Assumes these are declared in your class header)
+    pure_fluid_boxes.clear();
+    boundary_boxes.clear();
+
+    for (int b = 0; b < num_boxes; ++b) 
+    {
+        // If it contains valid data, keep it! (Pure NODATA boxes are naturally pruned here)
+        if (has_valid_flags[b] > 0) 
+        {
+            active_list.push_back(box_array[b]);
+            
+            // Categorize based on whether it also contains any NaNs (shorelines)
+            if (has_nan_flags[b] > 0) {
+                boundary_boxes.push_back(b);
+            } else {
+                pure_fluid_boxes.push_back(b);
+            }
+        }
+    }
+
+    box_array = amrex::BoxArray(std::move(active_list));
+}
 
 void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time, 
                                           const amrex::BoxArray& ba, 
@@ -338,6 +455,9 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
     U_new[lev].define(ba, dm, ncomp_U, ngrow_U);
     U_old[lev].define(ba, dm, ncomp_U, ngrow_U);
     DynamicTerrain[lev].define(ba, dm, ncomp_Terrain, ngrow_Terrain);
+        
+    // We use our terrain static representation
+    TerrainMapStaticToDynamic(lev);
 
     // Track time-stamps for standard evolution sequences
     t_new[lev] = time;
@@ -352,38 +472,14 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
         flux_reg[lev] = nullptr;
     }
 
-    // 4. DYNAMIC TERRAIN ROUTING FOR NEWLY SPAWNED GRIDS
-
-    if (lev == static_terrain_lev) {
-        // Safe distributed cross-rank layout copy from our persistent baseline ground truth
-        DynamicTerrain[lev].ParallelCopy(StaticTerrain, 0, 0, ncomp_Terrain);
-    } 
-    else if (lev < static_terrain_lev) {
-        // Coarser tiers are calculated via down-averaging sweeps
-        DynamicTerrain[lev].setVal(0.0); 
-    } 
-    else {
-        // Sub-grid fine tiers: Project topography down from parent level (lev-1) 
-        // to maintain conservation rules across newly refinement patches
-        FillCoarsePatch(lev, time, DynamicTerrain[lev], Terrain_bcs, 0, ncomp_Terrain);
-    }
-
-    // 5. Populate the newly created fluid states with conservative interpolation
-    // from the underlying coarser level mesh state data
     FillCoarsePatch(lev, time, U_new[lev], U_bcs, 0, ncomp_U);
 }
 
 void AmrMeshState::Regrid(int lbase, amrex::Real time) {
     amrex::Print() << "[DEBUG REGRID] Intercepting regrid pass at lbase = " << lbase << "\n";
-
     // 1. FORWARD TO THE NATIVE AMREX CORE BACKEND
     // This executes the exact block of code you provided, updating all box layers
     regrid(lbase, time);
-
-    // 2. RUN OUR SYNCHRONIZATION POST-PROCESS SWEEP
-    // Now that finest_level is updated, we safely anchor our down-averaging routines
-    PostCoarsePatchSync();
-    
 }
 
 void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm) {
@@ -411,9 +507,43 @@ void AmrMeshState::ClearLevel(int lev) {
     DynamicTerrain[lev].clear();
 }
 
-void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time, int ngrow) {
+void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time, int ngrow)
+{   
 
+    if (lev >= max_level) return;
+
+    if (time == 0.0) {
+        // Use our high-res VRAM StaticTerrain to decide where to refine
+        const amrex::MultiFab& terrain = DynamicTerrain[lev];
+        const amrex::Real slope_threshold = physics_p.z_grad_thresh[lev];
+        const amrex::Real* dx = Geom(lev).CellSize();
+
+        for (amrex::MFIter mfi(tags); mfi.isValid(); ++mfi) {
+            const amrex::Box& bx = mfi.validbox();
+            const auto tag = tags.array(mfi);
+            const auto z = terrain.array(mfi);
+
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                // Check slope to tag for refinement
+                amrex::Real dzdx = (z(i+1,j,k,0) - z(i-1,j,k,0)) / (2.0 * dx[0]);
+                amrex::Real dzdy = (z(i,j+1,k,0) - z(i,j-1,k,0)) / (2.0 * dx[1]);
+                
+                // Tag if slope is high
+                if (std::sqrt(dzdx*dzdx + dzdy*dzdy) > slope_threshold) {
+                    tag(i, j, k) = amrex::TagBox::SET;
+                }
+            });
+        }
+    }
 }
+
+void AmrMeshState::GetTerrainData(int lev, Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime) {
+    data.clear();
+    datatime.clear();
+    data.push_back(&DynamicTerrain[lev]);
+    datatime.push_back(t_new[lev]);
+}
+
 
 void AmrMeshState::GetData(int lev, Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime) {
     data.clear();
@@ -522,6 +652,42 @@ void AmrMeshState::FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& 
 
 }
 
+
+void AmrMeshState::FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf,  amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp) {
+    BL_ASSERT(lev > 0);
+
+    Vector<MultiFab*> cmf;
+    Vector<Real> ctime;
+    GetTerrainData(lev-1, time, cmf, ctime);
+    Interpolater* mapper = &cell_cons_interp;
+
+    if (cmf.size() != 1) {
+        amrex::Abort("FillCoarsePatch: how did this happen?");
+    }
+
+    if(Gpu::inLaunchRegion())
+    {
+        GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
+        PhysBCFunct<GpuBndryFuncFab<EmptyFill> > cphysbc(geom[lev-1],bcs,gpu_bndry_func);
+        PhysBCFunct<GpuBndryFuncFab<EmptyFill> > fphysbc(geom[lev],bcs,gpu_bndry_func);
+
+        amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
+                                     cphysbc, 0, fphysbc, 0, refRatio(lev-1),
+                                     mapper, bcs, 0);
+    }
+    else
+    {
+        CpuBndryFuncFab bndry_func(nullptr);  // Without EXT_DIR, we can pass a nullptr.
+        PhysBCFunct<CpuBndryFuncFab> cphysbc(geom[lev-1],bcs,bndry_func);
+        PhysBCFunct<CpuBndryFuncFab> fphysbc(geom[lev],bcs,bndry_func);
+
+        amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
+                                     cphysbc, 0, fphysbc, 0, refRatio(lev-1),
+                                     mapper, bcs, 0);
+    }
+
+}
+
 void AmrMeshState::AverageDown (amrex::Vector<amrex::MultiFab>& arr) {
     for (int lev = finest_level-1; lev >= 0; --lev) {
         amrex::average_down(arr[lev+1], arr[lev],
@@ -537,37 +703,3 @@ void AmrMeshState::AverageDownTo(int crse_lev, amrex::Vector<amrex::MultiFab>&  
 }
 
 
-void AmrMeshState::PostCoarsePatchSync()
-{
-    amrex::Print() << "[DEBUG REGRID] Executing macro-level down-averaging synchronization...\n";
-
-    // A. Synchronize the dynamic calculation terrain layout down to Level 0
-    // If runtime grids shifted, coarse backgrounds must match the fine averages
-    for (int lev = static_terrain_lev - 1; lev >= 0; --lev)
-    {
-        if (lev + 1 <= finestLevel() && LevelDefined(lev) && LevelDefined(lev + 1))
-        {
-            amrex::average_down(
-                DynamicTerrain[lev+1], DynamicTerrain[lev],
-                geom[lev+1], geom[lev],
-                0, ncomp_Terrain, refRatio(lev));
-        }
-    }
-
-    // B. Synchronize the active shallow-water fluid matrices (U_new)
-    // Ensures perfect conservation of mass (h) and momentum (hu, hv) across full domain tree
-    int current_finest = finestLevel();
-    for (int lev = current_finest - 1; lev >= 0; --lev)
-    {
-        
-        if (LevelDefined(lev) && LevelDefined(lev + 1))
-        {
-            amrex::average_down(
-                U_new[lev+1], U_new[lev],
-                geom[lev+1], geom[lev],
-                0, ncomp_U, refRatio(lev));
-        }
-    }
-
-    amrex::Print() << "[DEBUG REGRID] Regrid synchronization phase complete.\n";
-}

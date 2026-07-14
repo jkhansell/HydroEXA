@@ -43,6 +43,7 @@ struct PhysicsParameters
     int model{0};                                 // Model selection: 0 for SWE, 1 for SWE-Exner
     amrex::Vector<amrex::Real> h_grad_thresh;     // Thresholds for tagging based on height gradients
     amrex::Vector<amrex::Real> umag_grad_thresh;  // Threshold for tagging based on velocity magnitude gradients
+    amrex::Vector<amrex::Real> z_grad_thresh;  // Threshold for tagging based on velocity magnitude gradients
 };
 
 

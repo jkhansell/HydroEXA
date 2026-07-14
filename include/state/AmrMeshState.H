@@ -2,12 +2,22 @@
 #ifndef AMRMESHSTATE_H_
 #define AMRMESHSTATE_H_
 #include <memory>
+#include <vector>
 
 #include <AMReX_AmrCore.H>
 #include <AMReX_FluxRegister.H>
 #include <AMReX_BCRec.H>
+#include <AMReX_ParallelDescriptor.H>
+#include <AMReX_ParmParse.H>
+#include <AMReX_MultiFabUtil.H>
+#include <AMReX_FillPatchUtil.H>
+#include <AMReX_PlotFileUtil.H>
+#include <AMReX_VisMF.H>
+#include <AMReX_PhysBCFunct.H>
 
 #include <io/IOHandler.H>
+#include <utils/Params.H>
+
 
 class AmrMeshState : public amrex::AmrCore {
     public:
@@ -19,6 +29,10 @@ class AmrMeshState : public amrex::AmrCore {
                      int terrain_ref_lev, 
                      HDF5SpatialMetadata& meta,
                      std::string input,
+                     RuntimeParameters runtime_params,
+                     IOParameters io_params,
+                     AMRParameters amr_params,
+                     PhysicsParameters physics_params,
                      /*AmrCore params*/
                      const amrex::RealBox& rb, 
                      int max_level_in,
@@ -33,8 +47,7 @@ class AmrMeshState : public amrex::AmrCore {
             this->ncomp_Terrain = ncomp_Terrain;
         }*/
 
-        void InitializeStaticTerrain();
-        void PostCoarsePatchSync();
+        void InitializeTerrainFluid();
         void Regrid(int lbase, amrex::Real time);
 
             
@@ -111,17 +124,21 @@ class AmrMeshState : public amrex::AmrCore {
     protected: 
         virtual void PostProcessBaseGrids(amrex::BoxArray& box_array) const override;
 
-
     private:
         // Internal helper functions for level management
         void FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
         void FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
-        
-        void PostInit();
-
+        void FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
+    
         void AverageDown (amrex::Vector<amrex::MultiFab>& arr);
         void AverageDownTo(int crse_lev, amrex::Vector<amrex::MultiFab>& arr);
+        
         void GetData(int lev, amrex::Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime);
+        void GetTerrainData(int lev, amrex::Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime);
+        
+        void TerrainMapStaticToDynamic(int lev);
+        void FluidMapStaticToDynamic(int lev);
+
 
         // Manages all I/O operations (checkpointing, plotfiles, restarts)
         std::shared_ptr<IOHandler> IO;
@@ -141,6 +158,10 @@ class AmrMeshState : public amrex::AmrCore {
         amrex::Vector<amrex::MultiFab> U_new;
         amrex::Vector<amrex::MultiFab> U_old;
         amrex::Vector<amrex::MultiFab> DynamicTerrain;
+        
+        mutable std::vector<int> pure_fluid_boxes;
+        mutable std::vector<int> boundary_boxes;
+
         amrex::Vector<amrex::Real> t_new;
         amrex::Vector<amrex::Real> t_old;
         amrex::Vector<amrex::Real> dt;
@@ -149,20 +170,29 @@ class AmrMeshState : public amrex::AmrCore {
         amrex::Vector<amrex::BCRec> U_bcs;        // 1-component
         amrex::Vector<amrex::BCRec> Terrain_bcs;  // 1-component
 
-
         // --- Static Database State ---
         // Ground Truth Layer: Split across MPI ranks uniformly at ith Level resolution.
         // These three members define the permanent, unchanging database layout.
         amrex::BoxArray             static_ba;
         amrex::DistributionMapping  static_dm;
-        amrex::MultiFab StaticTerrain;
-        int static_terrain_lev; 
+        amrex::Geometry             static_geom;   // <--- NEW: Dedicated geometry for the static layer
+        amrex::MultiFab             StaticTerrain;
+        
+        std::unique_ptr<amrex::MultiFab> StaticFluid;
+        
+        int static_terrain_lev;
+
 
         // Flux registers for coarse-fine synchronization
         amrex::Vector<std::unique_ptr<amrex::FluxRegister>> flux_reg;
 
         std::string hdf5_path;
         std::string restart_chkfile;
+
+        RuntimeParameters runtime_p;
+        IOParameters      io_p;
+        AMRParameters     amr_p;
+        PhysicsParameters physics_p;
 };
 
 #endif

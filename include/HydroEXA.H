@@ -22,6 +22,7 @@ class HydroEXA
         HydroEXA();
         ~HydroEXA() = default;
 
+        void ReadParameters();
         void Initialize();
         void Compute();
         void Finalize();
