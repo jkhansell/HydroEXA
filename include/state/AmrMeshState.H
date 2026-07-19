@@ -3,6 +3,7 @@
 #define AMRMESHSTATE_H_
 #include <memory>
 #include <vector>
+#include <algorithm>
 
 #include <AMReX_AmrCore.H>
 #include <AMReX_FluxRegister.H>
@@ -14,10 +15,12 @@
 #include <AMReX_PlotFileUtil.H>
 #include <AMReX_VisMF.H>
 #include <AMReX_PhysBCFunct.H>
+#include <AMReX_MultiFab.H>
+#include <AMReX_Reduce.H>
 
 #include <io/IOHandler.H>
 #include <utils/Params.H>
-
+#include <solvers/SolverVariant.H>
 
 class AmrMeshState : public amrex::AmrCore {
     public:
@@ -48,6 +51,8 @@ class AmrMeshState : public amrex::AmrCore {
         }*/
 
         void InitializeTerrainFluid();
+        void InitializeSolver();
+
         void Regrid(int lbase, amrex::Real time);
 
             
@@ -138,6 +143,7 @@ class AmrMeshState : public amrex::AmrCore {
         
         void TerrainMapStaticToDynamic(int lev);
         void FluidMapStaticToDynamic(int lev);
+        void CheckNaNsAndValidInMultiFab(const amrex::MultiFab& mf, int& global_has_valid, int& global_has_nan, int comp = 0);
 
 
         // Manages all I/O operations (checkpointing, plotfiles, restarts)
@@ -193,6 +199,8 @@ class AmrMeshState : public amrex::AmrCore {
         IOParameters      io_p;
         AMRParameters     amr_p;
         PhysicsParameters physics_p;
+
+        SolverVariant solver; 
 };
 
 #endif

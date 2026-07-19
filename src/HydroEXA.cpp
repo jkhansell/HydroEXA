@@ -40,7 +40,7 @@ void HydroEXA::ReadParameters() {
         // read in an array of thresholds for the gradients of umag and h, which are the tagging threshold
         amrex::ParmParse pp("HydroEXA");
 
-        pp.query("model", physics_params.model);   // 0 SWE, 1 SWE-Exner 
+        pp.query("model", physics_params.model);
         pp.query("cfl", physics_params.cfl);
 
         int n = pp.countval("h_grad_thresh");
@@ -59,7 +59,6 @@ void HydroEXA::ReadParameters() {
         }
     }
 }
-
 void HydroEXA::Initialize() {
     BL_PROFILE("HydroEXA::Initialize");
 
@@ -76,16 +75,18 @@ void HydroEXA::Initialize() {
     amrex::ParmParse pp_amr("amr");
     pp_amr.query("blocking_factor", bf);
 
+    // 1. Pad the discrete cell tracking counts to satisfy the blocking factor
     int base_nx = ((base_nx_raw + bf - 1) / bf) * bf;
     int base_ny = ((base_ny_raw + bf - 1) / bf) * bf;
     int base_nz = 0;
 
-    amrex::Real level0_dx = (metadata.prob_hi_x - metadata.prob_lo_x) / base_nx;
-    amrex::Real level0_dy = (metadata.prob_hi_y - metadata.prob_lo_y) / base_ny;
+    // 2. FIX: Scale the HDF5 dx/dy up to Level 0 resolution using the refinement factor
+    amrex::Real level0_dx = metadata.dx * static_cast<amrex::Real>(refinement_scale);
+    amrex::Real level0_dy = metadata.dy * static_cast<amrex::Real>(refinement_scale);
 
-
-    // amrex::Real padded_prob_hi_x = metadata.prob_lo_x + (static_cast<amrex::Real>(base_nx) * level0_dx);
-    // amrex::Real padded_prob_hi_y = metadata.prob_lo_y + (static_cast<amrex::Real>(base_ny) * level0_dy);
+    // 3. Extend the high bounds of the physical domain using the explicit dx/dy and padded cell count
+    amrex::Real padded_prob_hi_x = metadata.prob_lo_x + (static_cast<amrex::Real>(base_nx) * level0_dx);
+    amrex::Real padded_prob_hi_y = metadata.prob_lo_y + (static_cast<amrex::Real>(base_ny) * level0_dy);
 
     // =======================================================================
     // GEOMETRY VERIFICATION DIAGNOSTICS
@@ -94,24 +95,22 @@ void HydroEXA::Initialize() {
                    << "[GEOM DIAGNOSTIC] Verifying HDF5 to AMReX Structural Mapping\n"
                    << "============================================================\n"
                    << "  -> Raw HDF5 Resolution      : " << metadata.global_nx << " x " << metadata.global_ny << "\n"
-                   << "  -> Reference Terrain Level  : " << amr_params.terrain_ref_lev << " (Refinement Scale: " << refinement_scale << "x)\n"
+                   << "  -> HDF5 Explicit Resolution : dx=" << metadata.dx << " m, dy=" << metadata.dy << " m\n"
+                   << "  -> Reference Terrain Level  : " << amr_params.terrain_ref_lev << " (Scale: " << refinement_scale << "x)\n"
                    << "  -> Target Level 0 Raw Size  : " << base_nx_raw << " x " << base_ny_raw << "\n"
                    << "  -> Grid Blocking Factor     : " << bf << "\n"
                    << "  -> Padded Level 0 Cell Count: [" << base_nx << ", " << base_ny << ", " << base_nz << "]\n"
-                   << "  -> Calculated Cell Spacing  : dx=" << level0_dx << " m, dy=" << level0_dy << " m\n"
+                   << "  -> Derived Level 0 Cell Spacing: dx=" << level0_dx << " m, dy=" << level0_dy << " m\n"
                    << "  -> Physical Domain Low Bound: [" << metadata.prob_lo_x << ", " << metadata.prob_lo_y << ", 0.0]\n"
-                   << "  -> Physical Domain High Bound: [" << metadata.prob_hi_x << ", " << metadata.prob_hi_y << ", 1.0]\n"
+                   << "  -> ORIGINAL High Bound      : [" << metadata.prob_hi_x << ", " << metadata.prob_hi_y << ", 0.0]\n"
+                   << "  -> EXTENDED Padded High Bound: [" << padded_prob_hi_x << ", " << padded_prob_hi_y << ", 0.0]\n"
                    << "============================================================\n\n";
 
-    // =======================================================================
-    // CRITICAL FIX: OVERRIDE AMREX GEOMETRY PARAMETERS FORCEFULLY
-    // =======================================================================
-    
+    // 4. Package the newly expanded, resolution-safe domain boundaries
     amrex::Vector<amrex::Real> prob_lo = { metadata.prob_lo_x, metadata.prob_lo_y, 0.0 };
-    amrex::Vector<amrex::Real> prob_hi = { metadata.prob_hi_x, metadata.prob_hi_y, 0.0 };
+    amrex::Vector<amrex::Real> prob_hi = { padded_prob_hi_x, padded_prob_hi_y, 0.0 }; 
     amrex::Vector<int> n_cell_arr = { base_nx, base_ny, base_nz };
     amrex::RealBox real_domain(prob_lo.data(), prob_hi.data());
-    // =======================================================================
 
     amrex::Vector<amrex::IntVect> ref_ratios(amr_params.max_amr_level);
     for (int lev = 0; lev < amr_params.max_amr_level; ++lev) {

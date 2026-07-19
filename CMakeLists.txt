@@ -54,6 +54,7 @@ set(HYDROEXA_SOURCES
     src/io/IOHandler.cpp
     src/io/Checkpointer.cpp
     src/state/AmrMeshState.cpp
+    src/solvers/Roe.cpp
 )
 
 add_executable(HydroEXA ${HYDROEXA_SOURCES})

@@ -6,7 +6,6 @@ import rasterio
 # READ INPUT TIFF (BATHYMETRY / TOPO)
 # ============================================================
 tiff_filename = "/lustre/orion/geo161/scratch/jkhansell/rasterization_CR/geooutputs/Puntos_Alajuela/Puntos_Alajuela_Alajuela.tif"  # Change to your actual TIFF path
-
 with rasterio.open(tiff_filename) as src:
     # Read the first band as the bathymetry array [Y][X]
     Z_bathymetry = src.read(1).astype("float64")
@@ -14,14 +13,20 @@ with rasterio.open(tiff_filename) as src:
     # === ADD THIS LINE TO FLIP THE Y-AXIS ===
     Z_bathymetry = Z_bathymetry[::-1, :] 
 
-    # Extract resolution (assuming square pixels, or dx/dy from transform)
+    # Extract spatial resolution
     dx = float(src.transform[0])
     dy = float(abs(src.transform[4]))
 
-    # === FORCE LOCAL COORDINATES FOR AMReX MAPPING ===
-    # Using 0.0 ensures AMReX matches its default geometry.prob_lo layout framework.
-    x_ll = 0.0
-    y_ll = 0.0
+    # === EXTRACT TRUE GEOSPATIAL COORDINATES ===
+    # src.transform[2] is the exact Western (Left) edge: X_ll
+    x_ll = float(src.transform[2])
+    
+    # src.transform[5] is the Northern (Top) edge. Since we flipped the array 
+    # to orient from the bottom up, the new lower-left Y is the original top 
+    # minus the total physical height of the image.
+    y_ul = float(src.transform[5])
+    total_height_m = Z_bathymetry.shape[0] * dy
+    y_ll = float(y_ul - total_height_m)
 
     # Handle nodata values dynamically from the TIFF
     tiff_nodata = np.nan

@@ -31,7 +31,6 @@ class HydroEXA
 
     private:
         // Core Components
-        SolverVariant Model;
         std::shared_ptr<IOHandler> IO;              // Manages all I/O operations
         std::unique_ptr<AmrMeshState> MeshState;    // Encapsulates the AMR mesh, variables, and flux registers
 

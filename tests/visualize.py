@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 # ============================================================
 # READ GENERATED DATA FROM FILE
 # ============================================================
-filename = "simulation_input.h5"
+filename = "Alajuela.h5"
 
 with h5py.File(filename, "r") as h5f:
     Z_bathymetry = h5f["bathymetry"][:]
@@ -30,7 +30,7 @@ Z_active = np.ma.masked_equal(Z_bathymetry, nodata_value)
 # ============================================================
 # TOP-DOWN 2D VISUALIZATION TIMELINE
 # ============================================================
-plt.figure(figsize=(14, 6), dpi=150)
+plt.figure(figsize=(14, 14), dpi=250)
 
 # Set up a distinct facecolor for the plot background to visualize pruned spaces clearly
 ax = plt.gca()

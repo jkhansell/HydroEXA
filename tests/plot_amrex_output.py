@@ -310,17 +310,7 @@ def plot_amr_resolution_hierarchy(
     print(f"Successfully saved hierarchy visualization to: {output_file}")
 
 
-plot_amr_resolution_hierarchy(
-    "plt00000",
-    variable_name="z_bathymetry",
-    cbar_label="Bed Elevation [m]",
-    title="Bed Elevation with AMR Levels",
-    output_file="bed_elevation.png",
-    figsize=(16, 15),
-    cmap="jet"
-)
-
-plot_amr_resolution_hierarchy(
+plot_amrex_grid(
     "plt00000",
     variable_name="h_fluid",
     cbar_label="Bed Elevation [m]",

@@ -55,8 +55,9 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
                 U_bcs[comp].setHi(idim, amrex::BCType::ext_dir);
             }
         }
-    }
 
+    }
+    
     // 4. Populate terrain boundary conditions records (pure internal/extrapolated)
     for (int comp = 0; comp < ncomp_Terrain; ++comp) 
     {
@@ -91,6 +92,8 @@ void AmrMeshState::Initialize() {
         // start simulation from the beginning
 
         amrex::Print() << "FINEST LEVEL: " << finest_level << " MAX_LEVEL: "<< max_level <<  "\n";
+        
+        InitializeSolver();
         InitializeTerrainFluid();
         InitFromScratch(time); // Calls PostProcessBaseGrids to prune the mesh using NODATA
         //PostInit(); // Post Init Routine to fill lev < static_terrain_lev
@@ -129,6 +132,46 @@ void AmrMeshState::Initialize() {
     );
 }
 
+void AmrMeshState::CheckNaNsAndValidInMultiFab(const amrex::MultiFab& mf, int& global_has_valid, int& global_has_nan, int comp)
+{
+    BL_PROFILE("CheckNaNsAndValidInMultiFab");
+
+    int local_has_valid = 0;
+    int local_has_nan   = 0;
+
+    // Simultaneously check for ANY valid cells AND ANY NaN cells
+    amrex::ReduceOps<amrex::ReduceOpMax, amrex::ReduceOpMax> reduce_op;
+    amrex::ReduceData<int, int> reduce_data(reduce_op);
+    using ReduceTuple = decltype(reduce_data)::Type;
+
+    // Iterate through available valid tiles
+    for (amrex::MFIter mfi(mf); mfi.isValid(); ++mfi)
+    {
+        const amrex::Box& bx = mfi.tilebox();
+        auto const& fab_arr = mf.const_array(mfi);
+
+        reduce_op.eval(bx, reduce_data,
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept -> ReduceTuple
+        {
+            amrex::Real val = fab_arr(i, j, k, comp);
+            int is_nan   = amrex::isnan(val) ? 1 : 0;
+            int is_valid = !is_nan ? 1 : 0;
+            
+            return {is_valid, is_nan};
+        });
+    }
+
+    // Accumulate the findings locally for this rank
+    ReduceTuple local_tuple = reduce_data.value();
+    local_has_valid = amrex::get<0>(local_tuple);
+    local_has_nan   = amrex::get<1>(local_tuple);
+
+    // Sync state flags globally across all MPI ranks
+    global_has_valid = local_has_valid;
+    global_has_nan   = local_has_nan;
+    amrex::ParallelDescriptor::ReduceIntMax(global_has_valid);
+    amrex::ParallelDescriptor::ReduceIntMax(global_has_nan);
+}
 
 void AmrMeshState::InitializeTerrainFluid() {
 
@@ -139,17 +182,24 @@ void AmrMeshState::InitializeTerrainFluid() {
     // 1. Define the dedicated Geometry for the Static Terrain.
     // We borrow the physical bounding box (RealBox), coordinate system, 
     // and periodicity from the base AMR level (Level 0) so they perfectly align in physical space.
-    amrex::RealBox rb = Geom(0).ProbDomain();
+    amrex::Vector<amrex::Real> prob_lo = { metadata.prob_lo_x, metadata.prob_lo_y, 0.0 };
+    amrex::Vector<amrex::Real> prob_hi = { metadata.prob_hi_x, metadata.prob_hi_y, 0.0 }; 
+    amrex::RealBox rb(prob_lo.data(), prob_hi.data());
+    
+    //amrex::RealBox rb = Geom(0).ProbDomain();
+    
     int coord = Geom(0).Coord();
     amrex::Array<int, AMREX_SPACEDIM> is_per = Geom(0).isPeriodic();
     
     static_geom.define(domain, rb, coord, is_per);
+    amrex::Print() << "[DEBUG GEOM] Static Grid dx: " << static_geom.CellSize(0) 
+               << " | File Metadata dx: " << metadata.dx << "\n";
 
     // 2. Distribute the newly discovered global domain evenly
     static_ba.define(domain);
 
     // 1024x1024 chunks for lean MPI routing (128 is a good max size for testing)
-    static_ba.maxSize(1024); 
+    static_ba.maxSize(512); 
 
     static_dm.define(static_ba);
     
@@ -158,6 +208,10 @@ void AmrMeshState::InitializeTerrainFluid() {
     
     // we make this a dynamic pointer so that we can release after initialization
     StaticFluid = std::make_unique<amrex::MultiFab>(static_ba, static_dm, ncomp_U, 1); // No ghost cells for static terrain
+
+    StaticTerrain.setVal(-9999);
+    StaticFluid->setVal(-9999);
+
 
     // 4. Execute the parallel hyperslab readers
     for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
@@ -171,17 +225,58 @@ void AmrMeshState::InitializeTerrainFluid() {
     }
 
     StaticTerrain.FillBoundary(static_geom.periodicity());
-    
     StaticFluid->FillBoundary(static_geom.periodicity());
 
+    // -------------------------------------------------------------
+    // Topography Diagnostic: Check component 0 (Zb)
+    // -------------------------------------------------------------
+    int terrain_has_valid = 0;
+    int terrain_has_nan   = 0;
+    CheckNaNsAndValidInMultiFab(StaticTerrain, terrain_has_valid, terrain_has_nan, 0);
+
+    amrex::Print() << "\n============================================\n"
+                << "[DIAGNOSTIC] StaticTerrain Status Check:\n"
+                << "  -> Has Valid Cells: " << (terrain_has_valid ? "YES" : "NO") << "\n"
+                << "  -> Has NaN Cells  : " << (terrain_has_nan   ? "YES" : "NO") << "\n";
+
+
+    // -------------------------------------------------------------
+    // Fluid State Diagnostic: Loop through comps 0, 1, 2 (h, hu, hv)
+    // -------------------------------------------------------------
+    int fluid_has_valid = 0;
+    int fluid_has_nan   = 0;
+
+    for (int comp = 0; comp < 3; ++comp) {
+        int local_comp_valid = 0;
+        int local_comp_nan   = 0;
+        CheckNaNsAndValidInMultiFab(*StaticFluid, local_comp_valid, local_comp_nan, comp);
+        
+        fluid_has_valid = std::max(fluid_has_valid, local_comp_valid);
+        fluid_has_nan   = std::max(fluid_has_nan, local_comp_nan);
+    }
+
+    amrex::Print() << "[DIAGNOSTIC] StaticFluid Status Check (3 Comps):\n"
+                << "  -> Has Valid Fluid Cells: " << (fluid_has_valid ? "YES" : "NO") << "\n"
+                << "  -> Has NaN Fluid Cells  : " << (fluid_has_nan   ? "YES" : "NO") << "\n"
+                << "============================================\n\n";
+
     amrex::Print() << "[DEBUG INIT] Standalone StaticTerrain MultiFab successfully loaded.\n";
+}
+
+void AmrMeshState::InitializeSolver()
+{
+    if (physics_p.model == "Roe") {
+        solver = Roe{};
+    } else {  // fill with else ifs later
+        amrex::Abort("Unknown solver type: " + physics_p.model);
+    }
 }
 
 void AmrMeshState::TerrainMapStaticToDynamic(int lev)
 {
     amrex::MultiFab& amr_mf = DynamicTerrain[lev];
     
-    amr_mf.setVal(NAN);
+    amr_mf.setVal(-1);
 
     const amrex::Geometry& amr_geom = geom[lev];
     
@@ -191,8 +286,10 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
         amrex::IntVect ratio;
         for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
             ratio[idim] = static_cast<int>(std::round(amr_geom.CellSize(idim) / static_geom.CellSize(idim)));
+            amrex::Print() << "[DEBUG TerrainMapStaticToDynamic] Ratio: " << ratio[idim] << " Dim: " << idim << "\n";
+            
         }
-        
+    
         // Use the Geometry-aware 7-argument overload that natively bridges mismatched BoxArrays
         amrex::average_down(StaticTerrain, amr_mf, 
                             static_geom, amr_geom, 
@@ -247,7 +344,7 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
 {
     amrex::MultiFab& amr_mf = U_new[lev];
     
-    amr_mf.setVal(NAN);
+    amr_mf.setVal(-1);
 
     const amrex::Geometry& amr_geom = geom[lev];
     
@@ -401,7 +498,7 @@ void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
                 {
                     amrex::Real val = terrain_arr(i, j, k, 0);
                     int is_valid = !std::isnan(val) ? 1 : 0;
-                    int is_nan   =  std::isnan(val) ? 1 : 0;
+                    int is_nan   =  (val == -9999) ? 1 : 0;
                     return {is_valid, is_nan};
                 });
 

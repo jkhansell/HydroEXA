@@ -18,29 +18,29 @@ void IOHandler::ReadHDF5Hyperslab(
     const std::string &dataset_name,
     int dst_comp)
 {
+    const amrex::Real nodata_val = -9999;
     const int i_lo = bx.smallEnd(0);
     const int j_lo = bx.smallEnd(1);
     const int nx = bx.length(0);
     const int ny = bx.length(1);
 
     DatasetInfo &ds = hdf5_reader->Dataset(dataset_name);
-
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(ds.ndims == 2, "ReadHDF5Hyperslab() expects a 2D dataset.");
 
     const int h5_nx = ds.nx;
     const int h5_ny = ds.ny;
 
-    hid_t dataset_id = ds.dataset;
-    hid_t filespace_id = H5Dget_space(dataset_id);
-
     amrex::Box file_box(amrex::IntVect(0, 0), amrex::IntVect(h5_nx - 1, h5_ny - 1));
     amrex::Box valid_box = bx & file_box;
 
-    // Allocate without initializing with NAN. The kernel handles bounds checking.
+    // Use value-initialization (0.0) to avoid any random junk leaking through 
     amrex::Gpu::PinnedVector<amrex::Real> host_buffer(nx * ny);
 
     if (valid_box.ok())
     {
+        hid_t dataset_id = ds.dataset;
+        hid_t filespace_id = H5Dget_space(dataset_id);
+
         const int read_nx = valid_box.length(0);
         const int read_ny = valid_box.length(1);
 
@@ -52,70 +52,72 @@ void IOHandler::ReadHDF5Hyperslab(
             static_cast<hsize_t>(read_ny),
             static_cast<hsize_t>(read_nx)};
 
-        H5Sselect_hyperslab(
-            filespace_id,
-            H5S_SELECT_SET,
-            file_offset,
-            nullptr,
-            count,
-            nullptr);
+        H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, file_offset, nullptr, count, nullptr);
 
-        // Define the memory space layout to map directly into host_buffer
-        hsize_t mem_dims[2] = {
-            static_cast<hsize_t>(ny),
-            static_cast<hsize_t>(nx)};
-
+        hsize_t mem_dims[2] = {static_cast<hsize_t>(ny), static_cast<hsize_t>(nx)};
         hid_t memspace = H5Screate_simple(2, mem_dims, nullptr);
 
         hsize_t mem_offset[2] = {
             static_cast<hsize_t>(valid_box.smallEnd(1) - j_lo),
             static_cast<hsize_t>(valid_box.smallEnd(0) - i_lo)};
 
-        // Read directly into host_buffer at the correct offset
-        H5Sselect_hyperslab(
-            memspace,
-            H5S_SELECT_SET,
-            mem_offset,
-            nullptr,
-            count,
-            nullptr);
+        H5Sselect_hyperslab(memspace, H5S_SELECT_SET, mem_offset, nullptr, count, nullptr);
+
+        // FIX: Explicitly create a clean independent data transfer property list 
+        // to bypass any conflicting global collective configurations.
+        hid_t ind_dxpl = H5Pcreate(H5P_DATASET_XFER);
+        H5Pset_dxpl_mpio(ind_dxpl, H5FD_MPIO_INDEPENDENT);
 
         H5Dread(
             dataset_id,
             hdf5_reader->Datatype(),
             memspace,
             filespace_id,
-            hdf5_reader->TransferProperty(),
+            ind_dxpl, // Use our verified independent transfer handle
             host_buffer.data());
 
+        H5Pclose(ind_dxpl);
         H5Sclose(memspace);
+        H5Sclose(filespace_id);
     }
 
-    H5Sclose(filespace_id);
-
-    // Explicitly copy to device memory to avoid PCIe zero-copy latency in the kernel
+    // Allocate Device Vector
     amrex::Gpu::DeviceVector<amrex::Real> device_buffer(host_buffer.size());
+    
+    // Copy asynchronous to device
     amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, host_buffer.begin(), host_buffer.end(), device_buffer.begin());
+    
+    // FIX: Force the GPU stream to block and wait for the host data payload 
+    // to complete transfer before continuing CPU processing.
+    amrex::Gpu::streamSynchronize(); 
 
     const amrex::Real *device_ptr = device_buffer.data();
+
+    const bool is_valid_ok = valid_box.ok();
+    const int v_ilo = is_valid_ok ? valid_box.smallEnd(0) : int(1e9);
+    const int v_ihi = is_valid_ok ? valid_box.bigEnd(0)  : int(-1e9);
+    const int v_jlo = is_valid_ok ? valid_box.smallEnd(1) : int(1e9);
+    const int v_jhi = is_valid_ok ? valid_box.bigEnd(1)  : int(-1e9);
 
     amrex::ParallelFor(
         bx,
         [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
         {
-            if (i < 0 || j < 0 || i >= h5_nx || j >= h5_ny)
-            {
-                arr(i, j, k, dst_comp) = NAN;
-            }
-            else
+            if (i >= v_ilo && i <= v_ihi && j >= v_jlo && j <= v_jhi)
             {
                 int idx = (j - j_lo) * nx + (i - i_lo);
                 arr(i, j, k, dst_comp) = device_ptr[idx];
             }
+            else
+            {
+                arr(i, j, k, dst_comp) = nodata_val; 
+            }
         });
 
+    // Finalize stream before exit
     amrex::Gpu::streamSynchronize();
 }
+
 
 void IOHandler::ReadHDF5HyperslabComponents(
     amrex::Array4<amrex::Real> const &arr,
@@ -124,6 +126,9 @@ void IOHandler::ReadHDF5HyperslabComponents(
     int first_comp,
     int ncomp)
 {
+
+    const amrex::Real nodata_val = -9999;
+
     const int i_lo = bx.smallEnd(0);
     const int j_lo = bx.smallEnd(1);
     const int nx = bx.length(0);
@@ -141,7 +146,6 @@ void IOHandler::ReadHDF5HyperslabComponents(
     amrex::Box file_box(amrex::IntVect(0, 0), amrex::IntVect(h5_nx - 1, h5_ny - 1));
     amrex::Box valid_box = bx & file_box;
 
-    // Remove the slow NAN initialization. Pinned allocation takes time, 
     // but avoiding the initialization loop saves a massive amount of CPU time.
     amrex::Gpu::PinnedVector<amrex::Real> host_buffer(nx * ny * ncomp);
 
@@ -195,6 +199,7 @@ void IOHandler::ReadHDF5HyperslabComponents(
     // to avoid extreme PCIe zero-copy bottlenecks during kernel execution.
     amrex::Gpu::DeviceVector<amrex::Real> device_buffer(host_buffer.size());
     amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, host_buffer.begin(), host_buffer.end(), device_buffer.begin());
+    amrex::Gpu::streamSynchronize(); 
     
     const amrex::Real *device_ptr = device_buffer.data();
 
@@ -205,7 +210,7 @@ void IOHandler::ReadHDF5HyperslabComponents(
         {
             if (i < 0 || j < 0 || i >= h5_nx || j >= h5_ny)
             {
-                arr(i, j, k, first_comp + n) = NAN;
+                arr(i, j, k, first_comp + n) = nodata_val;
             }
             else
             {
