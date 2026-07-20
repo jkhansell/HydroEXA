@@ -434,7 +434,7 @@ void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
     
     // Trackers for MPI reduction
     std::vector<int> has_valid_flags(num_boxes, 0);
-    std::vector<int> has_nan_flags(num_boxes, 0);
+    std::vector<int> has_nodata_flags(num_boxes, 0);
 
     // Grab Level 0 spatial coordinate metrics
     const auto& geom_lev0 = Geom(0);
@@ -476,7 +476,7 @@ void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
         );
 
         int box_has_valid = 0;
-        int box_has_nan   = 0;
+        int box_has_nodata = 0;
 
         // 4. Look up intersections with the local patches of your loaded StaticTerrain array
         for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
@@ -497,24 +497,24 @@ void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
                 [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept -> ReduceTuple
                 {
                     amrex::Real val = terrain_arr(i, j, k, 0);
-                    int is_valid = !std::isnan(val) ? 1 : 0;
-                    int is_nan   =  (val == -9999) ? 1 : 0;
-                    return {is_valid, is_nan};
+                    int is_nodata = (val == -9999) ? 1 : 0;
+                    int is_valid = (!is_nodata) ? 1 : 0;
+                    return {is_valid, is_nodata};
                 });
 
                 ReduceTuple local_tuple = reduce_data.value();
                 box_has_valid = std::max(box_has_valid, amrex::get<0>(local_tuple));
-                box_has_nan   = std::max(box_has_nan, amrex::get<1>(local_tuple));
+                box_has_nodata   = std::max(box_has_nodata, amrex::get<1>(local_tuple));
             }
         }
         
         has_valid_flags[b] = box_has_valid;
-        has_nan_flags[b]   = box_has_nan;
+        has_nodata_flags[b]   = box_has_nodata;
     }
 
     // 5. Global MPI Synchronization
     amrex::ParallelDescriptor::ReduceIntMax(has_valid_flags.data(), num_boxes);
-    amrex::ParallelDescriptor::ReduceIntMax(has_nan_flags.data(), num_boxes);
+    amrex::ParallelDescriptor::ReduceIntMax(has_nodata_flags.data(), num_boxes);
 
     // 6. Build final BoxArray and categorize the surviving box indices 1:1
     amrex::BoxList active_list;
@@ -531,7 +531,7 @@ void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
             active_list.push_back(box_array[b]);
             
             // Categorize based on whether it also contains any NaNs (shorelines)
-            if (has_nan_flags[b] > 0) {
+            if (has_nodata_flags[b] > 0) {
                 boundary_boxes.push_back(b);
             } else {
                 pure_fluid_boxes.push_back(b);
@@ -609,7 +609,7 @@ void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
 
     if (lev >= max_level) return;
 
-    if (time == 0.0) {
+    if (time == -1.0) {
         // Use our high-res VRAM StaticTerrain to decide where to refine
         const amrex::MultiFab& terrain = DynamicTerrain[lev];
         const amrex::Real slope_threshold = physics_p.z_grad_thresh[lev];
@@ -622,6 +622,16 @@ void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
 
             amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
                 // Check slope to tag for refinement
+                
+                amrex::Real z_east  = z(i+1, j, k, 0);
+                amrex::Real z_west  = z(i-1, j, k, 0);
+                amrex::Real z_north = z(i, j+1, k, 0);
+                amrex::Real z_south = z(i, j-1, k, 0);
+                
+                bool edge = (z_east == -9999) || (z_west == -9999) || (z_south == -9999) || (z_south == -9999);
+
+                if (edge) { return; }
+                
                 amrex::Real dzdx = (z(i+1,j,k,0) - z(i-1,j,k,0)) / (2.0 * dx[0]);
                 amrex::Real dzdy = (z(i,j+1,k,0) - z(i,j-1,k,0)) / (2.0 * dx[1]);
                 

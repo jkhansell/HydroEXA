@@ -21,6 +21,7 @@ plt*
 **/[Ee]rr.log
 **/*.h5
 tests/**/*.png
+tests/**/*.h5
 
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

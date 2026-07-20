@@ -29,7 +29,7 @@ with rasterio.open(tiff_filename) as src:
     y_ll = float(y_ul - total_height_m)
 
     # Handle nodata values dynamically from the TIFF
-    tiff_nodata = np.nan
+    tiff_nodata = -9999
 
 # ============================================================
 # INITIAL FLUID CONDITIONAL SYNTHESIS
