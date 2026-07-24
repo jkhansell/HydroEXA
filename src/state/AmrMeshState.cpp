@@ -204,13 +204,13 @@ void AmrMeshState::InitializeTerrainFluid() {
     static_dm.define(static_ba);
     
     // 3. Allocate the MultiFab
-    StaticTerrain.define(static_ba, static_dm, ncomp_Terrain, 1); // No ghost cells for static terrain
+    StaticTerrain.define(static_ba, static_dm, ncomp_Terrain, 2); // No ghost cells for static terrain
     
     // we make this a dynamic pointer so that we can release after initialization
-    StaticFluid = std::make_unique<amrex::MultiFab>(static_ba, static_dm, ncomp_U, 1); // No ghost cells for static terrain
+    StaticFluid = std::make_unique<amrex::MultiFab>(static_ba, static_dm, ncomp_U, 2); // No ghost cells for static terrain
 
-    StaticTerrain.setVal(-9999);
-    StaticFluid->setVal(-9999);
+    StaticTerrain.setVal(-9999.0);
+    StaticFluid->setVal(-9999.0);
 
 
     // 4. Execute the parallel hyperslab readers
@@ -276,7 +276,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
 {
     amrex::MultiFab& amr_mf = DynamicTerrain[lev];
     
-    amr_mf.setVal(-1);
+    amr_mf.setVal(-9999.0);
 
     const amrex::Geometry& amr_geom = geom[lev];
     
@@ -306,7 +306,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
 
         amrex::Real dummy_time = 0.0;
 
-        amrex::Interpolater* mapper = &amrex::cell_cons_interp;
+        amrex::Interpolater* mapper = &amrex::pc_interp;
 
         if (amrex::Gpu::inLaunchRegion())
         {
@@ -344,7 +344,7 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
 {
     amrex::MultiFab& amr_mf = U_new[lev];
     
-    amr_mf.setVal(-1);
+    amr_mf.setVal(-9999.0);
 
     const amrex::Geometry& amr_geom = geom[lev];
     
@@ -428,119 +428,91 @@ void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time,
 
 void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
 {
-    amrex::Print() << "[DEBUG PRUNE] Intercepting Level 0 layout via physical geometry mapping.\n";
-    
     const int num_boxes = box_array.size();
-    
-    // Trackers for MPI reduction
-    std::vector<int> has_valid_flags(num_boxes, 0);
-    std::vector<int> has_nodata_flags(num_boxes, 0);
+    if (num_boxes == 0) return;
 
-    // Grab Level 0 spatial coordinate metrics
-    const auto& geom_lev0 = Geom(0);
-    const amrex::Real* dx_lev0 = geom_lev0.CellSize();
-    const amrex::Real* prob_lo = geom_lev0.ProbLo();
+    // Vectors to hold local box validity across ranks (num_boxes is global)
+    std::vector<int> local_has_valid(num_boxes, 0);
+    std::vector<int> local_has_nan(num_boxes, 0);
 
-    // HDF5 File spacing attributes matching your Python initialization script
-    const double hdf5_dx = metadata.dx;
-    const double hdf5_dy = metadata.dy;
+    // Compute refinement factor for StaticTerrain's index space
+    const int scale = 1 << static_terrain_lev;
+    const amrex::IntVect ref_ratio(AMREX_D_DECL(scale, scale, scale));
 
-    for (int b = 0; b < num_boxes; ++b)
+    // Outer loop over local StaticTerrain patches (Only scans locally owned GPU data)
+    for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
     {
-        const amrex::Box& coarse_box = box_array[b];
+        const amrex::Box& patch_box = mfi.validbox();
+        auto const& terrain_arr = StaticTerrain.const_array(mfi);
 
-        // 1. Compute the exact physical coordinates bounding this candidate box
-        amrex::Real box_lo_x = prob_lo[0] + coarse_box.smallEnd(0) * dx_lev0[0];
-        amrex::Real box_hi_x = prob_lo[0] + (coarse_box.bigEnd(0) + 1) * dx_lev0[0];
-        amrex::Real box_lo_y = prob_lo[1] + coarse_box.smallEnd(1) * dx_lev0[1];
-        amrex::Real box_hi_y = prob_lo[1] + (coarse_box.bigEnd(1) + 1) * dx_lev0[1];
-
-        // 2. Map these physical coordinates to the HDF5 matrix row/column index bounds
-        int hdf5_i_lo = static_cast<int>(box_lo_x / hdf5_dx);
-        int hdf5_i_hi = static_cast<int>(box_hi_x / hdf5_dx) - 1;
-        int hdf5_j_lo = static_cast<int>(box_lo_y / hdf5_dy);
-        int hdf5_j_hi = static_cast<int>(box_hi_y / hdf5_dy) - 1;
-
-        int file_scale = metadata.global_nx / (geom_lev0.Domain().length(0) * (1 << static_terrain_lev));
-        if (file_scale > 1) {
-            hdf5_i_lo *= file_scale;
-            hdf5_i_hi *= file_scale;
-            hdf5_j_lo *= file_scale;
-            hdf5_j_hi *= file_scale;
-        }
-
-        // Create a Box matching the file's index space resolution
-        amrex::Box file_space_window(
-            amrex::IntVect(hdf5_i_lo, hdf5_j_lo),
-            amrex::IntVect(hdf5_i_hi, hdf5_j_hi)
-        );
-
-        int box_has_valid = 0;
-        int box_has_nodata = 0;
-
-        // 4. Look up intersections with the local patches of your loaded StaticTerrain array
-        for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
+        for (int b = 0; b < num_boxes; ++b)
         {
-            const amrex::Box& valid_patch = mfi.validbox();
-            amrex::Box safe_intersection = file_space_window & valid_patch;
+            // Upscale the coarse Level 0 box to match StaticTerrain's index resolution
+            amrex::Box scaled_box = amrex::refine(box_array[b], ref_ratio);
+            amrex::Box intersection = scaled_box & patch_box;
 
-            if (!safe_intersection.isEmpty())
+            if (intersection.ok())
             {
-                auto const& terrain_arr = StaticTerrain.const_array(mfi);
-                
-                // Simultaneously check for ANY valid cells AND ANY NaN cells
                 amrex::ReduceOps<amrex::ReduceOpMax, amrex::ReduceOpMax> reduce_op;
                 amrex::ReduceData<int, int> reduce_data(reduce_op);
                 using ReduceTuple = decltype(reduce_data)::Type;
 
-                reduce_op.eval(safe_intersection, reduce_data,
+                reduce_op.eval(intersection, reduce_data,
                 [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept -> ReduceTuple
                 {
                     amrex::Real val = terrain_arr(i, j, k, 0);
-                    int is_nodata = (val == -9999) ? 1 : 0;
-                    int is_valid = (!is_nodata) ? 1 : 0;
-                    return {is_valid, is_nodata};
+                    
+                    // Safe GPU Floating-point and NoData (-9999) check
+                    bool is_nodata = (val <= static_cast<amrex::Real>(-9998.0));
+                    
+                    return {!is_nodata ? 1 : 0, is_nodata ? 1 : 0};
                 });
 
-                ReduceTuple local_tuple = reduce_data.value();
-                box_has_valid = std::max(box_has_valid, amrex::get<0>(local_tuple));
-                box_has_nodata   = std::max(box_has_nodata, amrex::get<1>(local_tuple));
+                ReduceTuple local_tuple = reduce_data.value(); // Handles stream sync automatically
+                local_has_valid[b] = std::max(local_has_valid[b], amrex::get<0>(local_tuple));
+                local_has_nan[b]   = std::max(local_has_nan[b],   amrex::get<1>(local_tuple));
             }
         }
-        
-        has_valid_flags[b] = box_has_valid;
-        has_nodata_flags[b]   = box_has_nodata;
     }
 
-    // 5. Global MPI Synchronization
-    amrex::ParallelDescriptor::ReduceIntMax(has_valid_flags.data(), num_boxes);
-    amrex::ParallelDescriptor::ReduceIntMax(has_nodata_flags.data(), num_boxes);
+    // Single global MPI reduction across all ranks
+    amrex::ParallelDescriptor::ReduceIntMax(local_has_valid.data(), num_boxes);
+    amrex::ParallelDescriptor::ReduceIntMax(local_has_nan.data(), num_boxes);
 
-    // 6. Build final BoxArray and categorize the surviving box indices 1:1
+    // Rebuild active BoxList and update class index arrays
     amrex::BoxList active_list;
-    
-    // Clear out class member vectors (Assumes these are declared in your class header)
     pure_fluid_boxes.clear();
     boundary_boxes.clear();
 
     for (int b = 0; b < num_boxes; ++b) 
     {
-        // If it contains valid data, keep it! (Pure NODATA boxes are naturally pruned here)
-        if (has_valid_flags[b] > 0) 
+        if (local_has_valid[b] > 0) 
         {
             active_list.push_back(box_array[b]);
-            
-            // Categorize based on whether it also contains any NaNs (shorelines)
-            if (has_nodata_flags[b] > 0) {
-                boundary_boxes.push_back(b);
+            int new_idx = static_cast<int>(active_list.size()) - 1;
+
+            if (local_has_nan[b] > 0) {
+                boundary_boxes.push_back(new_idx);
             } else {
-                pure_fluid_boxes.push_back(b);
+                pure_fluid_boxes.push_back(new_idx);
             }
         }
     }
 
-    box_array = amrex::BoxArray(std::move(active_list));
+    amrex::Print() << "[DEBUG PRUNE] Successfully pruned Level 0 layout: Retained " 
+                   << active_list.size() << " / " << num_boxes << " boxes.\n";
+
+    // Safety check to preserve domain integrity if all boxes evaluate empty
+    if (active_list.isEmpty()) {
+        amrex::Print() << "[WARNING PRUNE] All boxes were pruned! Keeping full original domain layout.\n";
+        for (int b = 0; b < num_boxes; ++b) {
+            pure_fluid_boxes.push_back(b);
+        }
+    } else {
+        box_array = amrex::BoxArray(std::move(active_list));
+    }
 }
+
 
 void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time, 
                                           const amrex::BoxArray& ba, 
@@ -609,7 +581,7 @@ void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
 
     if (lev >= max_level) return;
 
-    if (time == -1.0) {
+    if (time == 0.0) {
         // Use our high-res VRAM StaticTerrain to decide where to refine
         const amrex::MultiFab& terrain = DynamicTerrain[lev];
         const amrex::Real slope_threshold = physics_p.z_grad_thresh[lev];
@@ -628,7 +600,7 @@ void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
                 amrex::Real z_north = z(i, j+1, k, 0);
                 amrex::Real z_south = z(i, j-1, k, 0);
                 
-                bool edge = (z_east == -9999) || (z_west == -9999) || (z_south == -9999) || (z_south == -9999);
+                bool edge = (z_east == -9999) || (z_west == -9999) || (z_north == -9999) || (z_south == -9999);
 
                 if (edge) { return; }
                 

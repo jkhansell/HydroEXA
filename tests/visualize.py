@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 # ============================================================
 # READ GENERATED DATA FROM FILE
 # ============================================================
-filename = "Alajuela.h5"
+filename = "SJ.h5"
 
 with h5py.File(filename, "r") as h5f:
     Z_bathymetry = h5f["bathymetry"][:]
@@ -59,7 +59,6 @@ plt.grid(True, linestyle=':', alpha=0.3, color='white')
 plt.tight_layout()
 plt.savefig("viz.png")
 plt.close()
-
 
 plt.imshow(Z_active)
 plt.savefig("z.png")

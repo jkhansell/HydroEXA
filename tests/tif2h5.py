@@ -5,7 +5,10 @@ import rasterio
 # ============================================================
 # READ INPUT TIFF (BATHYMETRY / TOPO)
 # ============================================================
-tiff_filename = "/lustre/orion/geo161/scratch/jkhansell/rasterization_CR/geooutputs/Puntos_Alajuela/Puntos_Alajuela_Alajuela.tif"  # Change to your actual TIFF path
+tiff_filename = "/lustre/orion/geo161/scratch/jkhansell/rasterization_CR/geooutputs/Puntos_Cartago_Heredia_SJ_San_Jose.tif"  # Change to your actual TIFF path
+filename = "SJ.h5"
+
+
 with rasterio.open(tiff_filename) as src:
     # Read the first band as the bathymetry array [Y][X]
     Z_bathymetry = src.read(1).astype("float64")
@@ -63,7 +66,6 @@ hdf5_nodata = np.nan
 # ============================================================
 # WRITE HDF5 INPUT
 # ============================================================
-filename = "Alajuela.h5"
 
 with h5py.File(filename, "w") as h5f:
     # 1. Write multi-component 3D Fluid Dataset [Comp][Y][X]
@@ -80,6 +82,7 @@ with h5py.File(filename, "w") as h5f:
     dset_bath = h5f.create_dataset(
         "bathymetry", data=Z_bathymetry, dtype="float64", compression="gzip"
     )
+    
     dset_bath.attrs["dx"] = dx
     dset_bath.attrs["dy"] = dy
     dset_bath.attrs["x_ll"] = x_ll

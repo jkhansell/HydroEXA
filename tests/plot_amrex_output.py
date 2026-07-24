@@ -3,6 +3,75 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+import numpy as np
+import yt
+
+def count_nans_per_level(plotfile_path, variable_name="h_fluid", nodata_val=-9999):
+    """
+    Counts NaNs and NoData sentinel values for each AMR level in an AMReX plotfile.
+    """
+    print(f"[YT] Inspecting plotfile for NaNs: {plotfile_path}")
+    ds = yt.load(plotfile_path)
+
+    # Dictionary to aggregate stats per level
+    level_stats = {}
+
+    for grid in ds.index.grids:
+        level = grid.Level
+        if level not in level_stats:
+            level_stats[level] = {
+                "total_cells": 0,
+                "nan_count": 0,
+                "nodata_count": 0,
+                "valid_count": 0
+            }
+
+        # Extract raw native grid data for this patch
+        raw_data = grid[("boxlib", variable_name)].to_ndarray()
+
+        # Total cells in this grid patch
+        patch_total = raw_data.size
+
+        # Detect IEEE NaNs
+        patch_nans = np.count_nonzero(np.isnan(raw_data))
+
+        # Detect Sentinel NoData values (e.g. -9999 or values < -9000)
+        patch_nodata = np.count_nonzero(raw_data == nodata_val)
+
+        # Combine NaNs and NoData
+        patch_invalid = np.count_nonzero(np.isnan(raw_data) | (raw_data == nodata_val))
+        patch_valid = patch_total - patch_invalid
+
+        # Accumulate stats for this level
+        level_stats[level]["total_cells"] += patch_total
+        level_stats[level]["nan_count"] += patch_nans
+        level_stats[level]["nodata_count"] += patch_nodata
+        level_stats[level]["valid_count"] += patch_valid
+
+    # Summary Report
+    print("=" * 65)
+    print(f"{'Level':<7} | {'Total Cells':<12} | {'NaN Count':<10} | {'-9999 Count':<12} | {'Valid Cells':<12}")
+    print("-" * 65)
+
+    for level in sorted(level_stats.keys()):
+        stats = level_stats[level]
+        print(
+            f"Level {level:<1} | "
+            f"{stats['total_cells']:<12} | "
+            f"{stats['nan_count']:<10} | "
+            f"{stats['nodata_count']:<12} | "
+            f"{stats['valid_count']:<12}"
+        )
+    print("=" * 65)
+
+    return level_stats
+
+# Usage:
+# stats = count_nans_per_level("plt00000", variable_name="h_fluid")
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import numpy as np
+import yt
 
 def plot_amrex_grid(
     plotfile_path,
@@ -16,37 +85,8 @@ def plot_amrex_grid(
     background_color="#1a1a1a",
     cbar_label="Value",
     title=None,
+    nodata_val=-9999,
 ):
-    """
-    Visualize an AMReX plotfile field together with its AMR grid hierarchy.
-
-    Parameters
-    ----------
-    plotfile_path : str
-        Path to the AMReX plotfile.
-    variable_name : str
-        Variable to visualize.
-    output_file : str, optional
-        Output image filename. Defaults to
-        'grid_viz_<variable_name>.png'.
-    cmap : str
-        Matplotlib colormap.
-    figsize : tuple
-        Figure size.
-    dpi : int
-        Figure DPI.
-    show_grids : bool
-        Whether to overlay AMR grid boundaries.
-    grid_colors : list, optional
-        Colors used for each AMR level.
-    background_color : str
-        Axes background color.
-    cbar_label : str
-        Colorbar label.
-    title : str, optional
-        Plot title.
-    """
-
     if grid_colors is None:
         grid_colors = ["white", "yellow", "cyan", "magenta", "red", "lime"]
 
@@ -57,14 +97,33 @@ def plot_amrex_grid(
         title = f"AMR Grid Topology ({variable_name})"
 
     print(f"[YT] Loading plotfile: {plotfile_path}")
-
     ds = yt.load(plotfile_path)
+
+    # --- NEW: Count NaNs / NoData per Level ---
+    level_stats = {}
+    for grid in ds.index.grids:
+        lev = grid.Level
+        if lev not in level_stats:
+            level_stats[lev] = {"total": 0, "nans": 0, "nodata": 0}
+
+        arr = grid[("boxlib", variable_name)].to_ndarray()
+        level_stats[lev]["total"] += arr.size
+        level_stats[lev]["nans"] += np.count_nonzero(np.isnan(arr))
+        level_stats[lev]["nodata"] += np.count_nonzero(arr == nodata_val)
+
+    print("\n[DIAGNOSTIC] --- NaN / NoData Count Per Level ---")
+    for lev in sorted(level_stats.keys()):
+        tot = level_stats[lev]["total"]
+        nans = level_stats[lev]["nans"]
+        nodata = level_stats[lev]["nodata"]
+        print(f"  Level {lev}: Total={tot}, NaNs={nans}, NoData({nodata_val})={nodata}, Valid={tot - nans - nodata}")
+    print("--------------------------------------------------\n")
 
     left_edge = ds.domain_left_edge.to_ndarray()
     right_edge = ds.domain_right_edge.to_ndarray()
     dims = ds.domain_dimensions
 
-    # Uniform covering grid
+    # Uniform covering grid for background visualization
     covering_grid = ds.covering_grid(
         level=0,
         left_edge=left_edge,
@@ -73,7 +132,7 @@ def plot_amrex_grid(
 
     data = covering_grid[("boxlib", variable_name)].to_ndarray()
     data = np.squeeze(data).T
-    data[np.isnan(data)] = np.nan
+    data[data < 0.1] = np.nan
 
     x = np.linspace(left_edge[0], right_edge[0], dims[0])
     y = np.linspace(left_edge[1], right_edge[1], dims[1])
@@ -89,7 +148,6 @@ def plot_amrex_grid(
         shading="auto",
     )
 
-    # Draw AMR grid boundaries
     if show_grids:
         for grid in ds.index.grids:
             level = grid.Level
@@ -125,198 +183,23 @@ def plot_amrex_grid(
     print(f"[YT] Saved: {output_file}")
 
 
-
-def plot_amrex_gradient(plotfile_path, variable_name="z_bathymetry", output_file="gradient_check_manual.png"):
-    ds = yt.load(plotfile_path)
-    
-    # 1. Get the data as a 2D array
-    # Using a covering grid for a consistent array
-    cg = ds.covering_grid(level=0, left_edge=ds.domain_left_edge, dims=ds.domain_dimensions)
-    arr = cg[("boxlib", variable_name)].to_ndarray().squeeze()
-    
-    # 2. Compute finite difference gradient
-    # dy is rows, dx is columns
-    gy, gx = np.gradient(arr)
-    grad_mag = np.sqrt(gx**2 + gy**2)
-    
-    # 3. Plot manually
-    fig, ax = plt.subplots(figsize=(15, 6))
-    im = ax.imshow(grad_mag.T, origin='lower', cmap='magma', extent=[ds.domain_left_edge[0], ds.domain_right_edge[0], ds.domain_left_edge[1], ds.domain_right_edge[1]])
-    plt.colorbar(im, label="Gradient Magnitude",pad=0.01, shrink=0.7)
-    
-    # Add grids
-    #for grid in ds.index.grids:
-    #    left = grid.LeftEdge
-    #    right = grid.RightEdge
-    #    rect = patches.Rectangle((left[0], left[1]), right[0]-left[0], right[1]-left[1], 
-    #                             linewidth=0.5, edgecolor='white', facecolor='none')
-    #    ax.add_patch(rect)
-        
-    plt.tight_layout()
-    plt.savefig(output_file)
-    print(f"[MANUAL] Saved: {output_file}")
-
-
-def plot_amr_resolution_hierarchy(
-    plotfile_path,
-    variable_name="h_fluid",
-    output_file=None,
-    cmap="viridis",
-    figsize=(15, 6),
-    dpi=150,
-    alpha_base=0.40,
-    alpha_step=0.15,
-    show_grids=True,
-    grid_colors=None,
-    background_color="#1a1a1a",
-    cbar_label=None,
-    title=None,
-):
-    """Overlay every native AMReX AMR grid patch at its exact resolution and location."""
-    if grid_colors is None:
-        grid_colors = [
-            "white",
-            "yellow",
-            "cyan",
-            "magenta",
-            "red",
-            "lime",
-            "orange",
-        ]
-
-    ds = yt.load(plotfile_path)
-    print(ds.field_list)
-
-
-    if output_file is None:
-        output_file = f"amr_levels_{variable_name}.png"
-
-    if title is None:
-        title = f"AMR Resolution Hierarchy ({variable_name})"
-
-    if cbar_label is None:
-        cbar_label = variable_name
-
-    left = ds.domain_left_edge.to_ndarray()
-    right = ds.domain_right_edge.to_ndarray()
-
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    ax.set_facecolor(background_color)
-
-    # Track min/max globally across patches to normalize the colorbar properly
-    vmin, vmax = float("inf"), float("-inf")
-    grid_data_list = []
-
-    # --- Phase 1: Read data from native individual grids ---
-    print(f"Processing {len(ds.index.grids)} total grids...")
-    for grid in ds.index.grids:
-        level = grid.Level
-
-        # Extract data for this individual patch
-        raw_data = grid[("boxlib", variable_name)].to_ndarray()
-
-        # Handle 2D data embedded in a 3D YTArray (Z-axis dimension is 1)
-        if raw_data.ndim == 3:
-            if raw_data.shape[2] == 1:
-                raw_data = raw_data[:, :, 0]
-            elif raw_data.shape[0] == 1:
-                raw_data = raw_data[0, :, :]
-
-        # Ensure we have a clean 2D array
-        data = np.squeeze(raw_data)
-        if data.ndim != 2:
-            continue
-
-        # Transpose to align with matplotlib's (Y, X) pcolormesh mapping
-        data = data.T
-        vmin = min(vmin, np.nanmin(data))
-        vmax = max(vmax, np.nanmax(data))
-
-        # Store boundaries and data for plotting
-        g_left = grid.LeftEdge.to_ndarray()
-        g_right = grid.RightEdge.to_ndarray()
-        grid_data_list.append((level, g_left, g_right, data))
-
-    # --- Phase 2: Plot patches sequentially by level ---
-    # Sorting ensures finer levels are painted over coarser levels cleanly
-    grid_data_list.sort(key=lambda x: x[0])
-
-    mesh = None
-    for level, g_left, g_right, data in grid_data_list:
-        ny, nx = data.shape
-
-        # Generate cell edge coordinates specific to this patch
-        x_edges = np.linspace(g_left[0], g_right[0], nx + 1)
-        y_edges = np.linspace(g_left[1], g_right[1], ny + 1)
-
-        # Calculate alpha step per level to visualize depth/hierarchy
-        level_alpha = min(alpha_base + alpha_step * level, 1.0)
-
-        mesh = ax.pcolormesh(
-            x_edges,
-            y_edges,
-            data,
-            cmap=cmap,
-            shading="flat",
-            alpha=level_alpha,
-            vmin=vmin,
-            vmax=vmax,
-        )
-
-        # --- Phase 3: Draw patch outlines if requested ---
-        if show_grids:
-            rect = patches.Rectangle(
-                (g_left[0], g_left[1]),
-                g_right[0] - g_left[0],
-                g_right[1] - g_left[1],
-                edgecolor=grid_colors[level % len(grid_colors)],
-                facecolor="none",
-                linewidth=0.8,
-                alpha=0.8,
-            )
-            ax.add_patch(rect)
-
-    # --- Formatting & Legend ---
-    if mesh is not None:
-        cbar = fig.colorbar(mesh, ax=ax, pad=0.01, shrink=0.7)
-        cbar.set_label(cbar_label)
-
-    ax.set_xlim(left[0], right[0])
-    ax.set_ylim(left[1], right[1])
-    ax.set_aspect("equal")
-
-    ax.set_xlabel("X [m]")
-    ax.set_ylabel("Y [m]")
-    ax.set_title(title)
-
-    # Create a clean, unique legend matching your resolution levels
-    unique_levels = sorted(list(set([g[0] for g in grid_data_list])))
-    handles = [
-        plt.Line2D(
-            [0],
-            [0],
-            color=grid_colors[lvl % len(grid_colors)],
-            lw=2,
-            label=f"Level {lvl}",
-        )
-        for lvl in unique_levels
-    ]
-    ax.legend(handles=handles, loc="upper right")
-
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=dpi)
-    plt.close()
-
-    print(f"Successfully saved hierarchy visualization to: {output_file}")
-
+#plot_amrex_grid(
+#    "plt00000",
+#    variable_name="h_fluid",
+#    cbar_label="Water Depth",
+#    title="Water Depth with AMR Levels",
+#    output_file="h_fluid.png",
+#    figsize=(16, 15),
+#    cmap="jet"
+#)
 
 plot_amrex_grid(
     "plt00000",
-    variable_name="h_fluid",
-    cbar_label="Bed Elevation [m]",
+    variable_name="z_bathymetry",
+    cbar_label="Bed Elevation",
     title="Bed Elevation with AMR Levels",
-    output_file="h_fluid.png",
+    output_file="z_bath.png",
     figsize=(16, 15),
-    cmap="jet"
+    cmap="terrain"
 )
 
