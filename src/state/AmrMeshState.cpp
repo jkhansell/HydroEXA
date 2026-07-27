@@ -3,6 +3,9 @@
 #include <state/AmrMeshState.H>
 #include <boundaries/EmptyFill.H>
 
+#include <utils/MaskedAverageDown.H>
+#include <utils/Logging.H>
+
 
 AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
                            int terrain_ref_lev, 
@@ -37,35 +40,41 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
     U_bcs.resize(ncomp_U);
     Terrain_bcs.resize(ncomp_Terrain);
 
+    const auto& period = geom[0].periodicity();
+
     // 3. Populate fluid boundary conditions record tracking
     for (int comp = 0; comp < ncomp_U; ++comp) 
     {
         for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) 
         {
-            if (Geom(0).isPeriodic()[idim]) 
+            if (period.isPeriodic(idim)) 
             {
-                // Periodic boundaries are tracked internally by AMReX routines
                 U_bcs[comp].setLo(idim, amrex::BCType::int_dir);
                 U_bcs[comp].setHi(idim, amrex::BCType::int_dir);
             } 
             else 
             {
-                // Direct non-periodic walls and open outflows to our HydroEXAFillExtDir GPU functor
                 U_bcs[comp].setLo(idim, amrex::BCType::ext_dir);
                 U_bcs[comp].setHi(idim, amrex::BCType::ext_dir);
             }
         }
-
     }
     
-    // 4. Populate terrain boundary conditions records (pure internal/extrapolated)
+    // 4. Populate terrain boundary conditions records (foextrap or int_dir if periodic)
     for (int comp = 0; comp < ncomp_Terrain; ++comp) 
     {
         for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) 
         {
-            // Terrain geometry is fixed; we pass int_dir so that the interpolator fills ghost cells safely
-            Terrain_bcs[comp].setLo(idim, amrex::BCType::foextrap);
-            Terrain_bcs[comp].setHi(idim, amrex::BCType::foextrap);
+            if (period.isPeriodic(idim)) 
+            {
+                Terrain_bcs[comp].setLo(idim, amrex::BCType::int_dir);
+                Terrain_bcs[comp].setHi(idim, amrex::BCType::int_dir);
+            }
+            else
+            {
+                Terrain_bcs[comp].setLo(idim, amrex::BCType::foextrap);
+                Terrain_bcs[comp].setHi(idim, amrex::BCType::foextrap);
+            }
         }
     }
 }
@@ -85,44 +94,23 @@ void AmrMeshState::ResizeLevels(int nlevs) {
 
 
 void AmrMeshState::Initialize() {
+    
     amrex::Real time = 0.0;
     int initial_step = 0;
 
     if (restart_chkfile == "") {
         // start simulation from the beginning
 
-        amrex::Print() << "FINEST LEVEL: " << finest_level << " MAX_LEVEL: "<< max_level <<  "\n";
-        
         InitializeSolver();
         InitializeTerrainFluid();
         InitFromScratch(time); // Calls PostProcessBaseGrids to prune the mesh using NODATA
         //PostInit(); // Post Init Routine to fill lev < static_terrain_lev
-        amrex::Print() << "FINEST LEVEL: " << finest_level << " MAX_LEVEL: "<< max_level <<  "\n";
 
-        // deallocating initial static fluid MultiFab pointer since we         
-        // already allocated the initial DynamicFluid Multifab and now refinement or coarsening 
+        // deallocating initial static fluid MultiFab pointer since we
+        // already allocated the initial DynamicFluid Multifab and now refinement or coarsening
         // is tackled by physics
         StaticFluid.reset();
-   
-        amrex::Print() << "[STUB] Skipping checkpoint write.\n";
     }
-    else {
-        amrex::Print() << "[STUB] Skipping checkpoint read.\n";
-    }
-
-    // --- DIAGNOSTICS START ---
-    amrex::Print() << "\n[DIAGNOSTIC] --- Level 0 Status ---\n";
-    amrex::Print() << "[DIAGNOSTIC] U_new size (number of levels): " << U_new.size() << "\n";
-    
-    if (U_new.size() > 0) {
-        amrex::Print() << "[DIAGNOSTIC] U_new[0] empty(): " << (U_new[0].empty() ? "YES" : "NO") << "\n";
-        amrex::Print() << "[DIAGNOSTIC] U_new[0] BoxArray size (number of boxes): " << U_new[0].boxArray().size() << "\n";
-        
-        // Let's check DynamicTerrain too just in case
-        amrex::Print() << "[DIAGNOSTIC] DynamicTerrain[0] empty(): " << (U_new[0].empty() ? "YES" : "NO") << "\n";
-        amrex::Print() << "[DIAGNOSTIC] DynamicTerrain[0] BoxArray size (number of boxes): " << U_new[0].boxArray().size() << "\n";
-    }
-    // --- DIAGNOSTICS END ---
 
     IO->WritePlotfile(
         U_new, DynamicTerrain, 
@@ -192,14 +180,11 @@ void AmrMeshState::InitializeTerrainFluid() {
     amrex::Array<int, AMREX_SPACEDIM> is_per = Geom(0).isPeriodic();
     
     static_geom.define(domain, rb, coord, is_per);
-    amrex::Print() << "[DEBUG GEOM] Static Grid dx: " << static_geom.CellSize(0) 
-               << " | File Metadata dx: " << metadata.dx << "\n";
+    LOG(INFO, "Static Grid dx: " + std::to_string(static_geom.CellSize(0)) +
+               " | File Metadata dx: " + std::to_string(metadata.dx));
 
     // 2. Distribute the newly discovered global domain evenly
     static_ba.define(domain);
-
-    // 1024x1024 chunks for lean MPI routing (128 is a good max size for testing)
-    static_ba.maxSize(512); 
 
     static_dm.define(static_ba);
     
@@ -226,41 +211,6 @@ void AmrMeshState::InitializeTerrainFluid() {
 
     StaticTerrain.FillBoundary(static_geom.periodicity());
     StaticFluid->FillBoundary(static_geom.periodicity());
-
-    // -------------------------------------------------------------
-    // Topography Diagnostic: Check component 0 (Zb)
-    // -------------------------------------------------------------
-    int terrain_has_valid = 0;
-    int terrain_has_nan   = 0;
-    CheckNaNsAndValidInMultiFab(StaticTerrain, terrain_has_valid, terrain_has_nan, 0);
-
-    amrex::Print() << "\n============================================\n"
-                << "[DIAGNOSTIC] StaticTerrain Status Check:\n"
-                << "  -> Has Valid Cells: " << (terrain_has_valid ? "YES" : "NO") << "\n"
-                << "  -> Has NaN Cells  : " << (terrain_has_nan   ? "YES" : "NO") << "\n";
-
-
-    // -------------------------------------------------------------
-    // Fluid State Diagnostic: Loop through comps 0, 1, 2 (h, hu, hv)
-    // -------------------------------------------------------------
-    int fluid_has_valid = 0;
-    int fluid_has_nan   = 0;
-
-    for (int comp = 0; comp < 3; ++comp) {
-        int local_comp_valid = 0;
-        int local_comp_nan   = 0;
-        CheckNaNsAndValidInMultiFab(*StaticFluid, local_comp_valid, local_comp_nan, comp);
-        
-        fluid_has_valid = std::max(fluid_has_valid, local_comp_valid);
-        fluid_has_nan   = std::max(fluid_has_nan, local_comp_nan);
-    }
-
-    amrex::Print() << "[DIAGNOSTIC] StaticFluid Status Check (3 Comps):\n"
-                << "  -> Has Valid Fluid Cells: " << (fluid_has_valid ? "YES" : "NO") << "\n"
-                << "  -> Has NaN Fluid Cells  : " << (fluid_has_nan   ? "YES" : "NO") << "\n"
-                << "============================================\n\n";
-
-    amrex::Print() << "[DEBUG INIT] Standalone StaticTerrain MultiFab successfully loaded.\n";
 }
 
 void AmrMeshState::InitializeSolver()
@@ -274,6 +224,14 @@ void AmrMeshState::InitializeSolver()
 
 void AmrMeshState::TerrainMapStaticToDynamic(int lev)
 {
+
+    // Ensure source coarse terrain has valid ghost halos prior to interpolation
+    StaticTerrain.FillBoundary(static_geom.periodicity());
+
+    if (StaticTerrain.contains_nan()) {
+        LOG(INFO, "StaticTerrain contains NaNs BEFORE average_down!\n");
+    }
+
     amrex::MultiFab& amr_mf = DynamicTerrain[lev];
     
     amr_mf.setVal(-9999.0);
@@ -281,19 +239,15 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
     const amrex::Geometry& amr_geom = geom[lev];
     
     // 2. Static is Finer than AMR: Restrict (Average Down)
-    if (static_terrain_lev > lev) 
+    if (static_terrain_lev > lev)
     {
         amrex::IntVect ratio;
         for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
             ratio[idim] = static_cast<int>(std::round(amr_geom.CellSize(idim) / static_geom.CellSize(idim)));
-            amrex::Print() << "[DEBUG TerrainMapStaticToDynamic] Ratio: " << ratio[idim] << " Dim: " << idim << "\n";
-            
         }
-    
+
         // Use the Geometry-aware 7-argument overload that natively bridges mismatched BoxArrays
-        amrex::average_down(StaticTerrain, amr_mf, 
-                            static_geom, amr_geom, 
-                            0, ncomp_Terrain, ratio);
+        amrex::masked_average_down(StaticTerrain, amr_mf, static_geom, amr_geom, 0, ncomp_Terrain, ratio, -9999.0);
     } 
     
     // 3. Static is Coarser than AMR: Prolongate (Interpolate from the custom standalone layer)
@@ -306,7 +260,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
 
         amrex::Real dummy_time = 0.0;
 
-        amrex::Interpolater* mapper = &amrex::pc_interp;
+        amrex::Interpolater* mapper = &amrex::cell_cons_interp;
 
         if (amrex::Gpu::inLaunchRegion())
         {
@@ -422,7 +376,9 @@ void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time,
     TerrainMapStaticToDynamic(lev);
     FluidMapStaticToDynamic(lev);
 
-    amrex::Print() << "[DEBUG] Level " << lev << " fully initialized without CoarsePatch dependency.\n";
+    DynamicTerrain[lev].FillBoundary(Geom(lev).periodicity());
+    U_new[lev].FillBoundary(Geom(lev).periodicity());
+    U_old[lev].FillBoundary(Geom(lev).periodicity());
 }
 
 
@@ -499,12 +455,12 @@ void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
         }
     }
 
-    amrex::Print() << "[DEBUG PRUNE] Successfully pruned Level 0 layout: Retained " 
-                   << active_list.size() << " / " << num_boxes << " boxes.\n";
+    LOG(DIAG, "Successfully pruned Level 0 layout: Retained "
+                   + std::to_string(active_list.size()) + " / " + std::to_string(num_boxes) + " boxes.");
 
     // Safety check to preserve domain integrity if all boxes evaluate empty
     if (active_list.isEmpty()) {
-        amrex::Print() << "[WARNING PRUNE] All boxes were pruned! Keeping full original domain layout.\n";
+        LOG_WARN("All boxes were pruned! Keeping full original domain layout.");
         for (int b = 0; b < num_boxes; ++b) {
             pure_fluid_boxes.push_back(b);
         }
@@ -545,7 +501,7 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
 }
 
 void AmrMeshState::Regrid(int lbase, amrex::Real time) {
-    amrex::Print() << "[DEBUG REGRID] Intercepting regrid pass at lbase = " << lbase << "\n";
+    LOG(DIAG, "Intercepting regrid pass at lbase = " + std::to_string(lbase));
     // 1. FORWARD TO THE NATIVE AMREX CORE BACKEND
     // This executes the exact block of code you provided, updating all box layers
     regrid(lbase, time);
@@ -578,14 +534,13 @@ void AmrMeshState::ClearLevel(int lev) {
 
 void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time, int ngrow)
 {   
-
     if (lev >= max_level) return;
 
     if (time == 0.0) {
         // Use our high-res VRAM StaticTerrain to decide where to refine
         const amrex::MultiFab& terrain = DynamicTerrain[lev];
         const amrex::Real slope_threshold = physics_p.z_grad_thresh[lev];
-        const amrex::Real* dx = Geom(lev).CellSize();
+        const auto dx = geom[lev].CellSizeArray();
 
         for (amrex::MFIter mfi(tags); mfi.isValid(); ++mfi) {
             const amrex::Box& bx = mfi.validbox();
@@ -600,7 +555,7 @@ void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
                 amrex::Real z_north = z(i, j+1, k, 0);
                 amrex::Real z_south = z(i, j-1, k, 0);
                 
-                bool edge = (z_east == -9999) || (z_west == -9999) || (z_north == -9999) || (z_south == -9999);
+                bool edge = (z_east == -9999.0) || (z_west == -9999.0) || (z_north == -9999.0) || (z_south == -9999.0);
 
                 if (edge) { return; }
                 
@@ -612,7 +567,7 @@ void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
                     tag(i, j, k) = amrex::TagBox::SET;
                 }
             });
-        }
+        } 
     }
 }
 

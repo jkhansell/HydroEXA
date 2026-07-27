@@ -3,6 +3,7 @@
 #include <AMReX_VisMF.H>
 #include <AMReX_ParallelDescriptor.H>
 #include <AMReX_PlotFileUtil.H>
+#include <utils/Logging.H>
 #include <fstream>
 #include <sstream>
 
@@ -14,7 +15,7 @@ void Checkpointer::Write(
 {
     const std::string checkpoint_name = amrex::Concatenate(chk_file, iteration);
 
-    amrex::Print() << "Writing checkpoint " << checkpoint_name << "\n";
+    LOG(INFO, "Writing checkpoint " + checkpoint_name);
 
     const int finest_level = state.FinestLevel();
     const int nlevels = finest_level + 1;
@@ -115,7 +116,7 @@ void Checkpointer::Read(
     int do_reflux, 
     const std::string& restart_chkfile) {
 
-    amrex::Print() << "Restart from checkpoint " << restart_chkfile << "\n";
+    LOG(INFO, "Restart from checkpoint " + restart_chkfile);
 
     // Header
     std::string File(restart_chkfile + "/Header");

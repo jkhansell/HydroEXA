@@ -2,7 +2,7 @@
 #define CHECKPOINTER_H
 
 #include <AMReX_REAL.H>
-
+#include <string>
 // 1. Forward declaration 
 class AmrMeshState;
 

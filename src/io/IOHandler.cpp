@@ -11,6 +11,7 @@
 
 // local includes
 #include <io/IOHandler.H>
+#include <utils/Logging.H>
 
 void IOHandler::ReadHDF5Hyperslab(
     amrex::Array4<amrex::Real> const &arr,
@@ -328,13 +329,11 @@ void IOHandler::WritePlotfile(
     }
 
     if (num_active_levels == 0) {
-        amrex::Print() << "[IOHandler] Warning: No valid levels found. Skipping plotfile.\n";
+        LOG_WARN("No valid levels found. Skipping plotfile.");
         return;
     }
 
     std::string plotfilename = amrex::Concatenate("plt", iteration, 5);
-    amrex::Print() << "[IOHandler] Initializing plotfile bundle output: " << plotfilename 
-                   << " with " << num_active_levels << " active levels.\n";
 
     // 2. Set variable string descriptors safely
     int ncomp_U = U[0].nComp();
@@ -386,5 +385,5 @@ void IOHandler::WritePlotfile(
         istep,
         ref_ratio);     
 
-    amrex::Print() << "[IOHandler] Plotfile write finalized cleanly on disk.\n";
+    LOG(INFO, "Plotfile write finalized cleanly on disk.");
 }

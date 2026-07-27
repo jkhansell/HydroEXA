@@ -1,4 +1,6 @@
+#include <string>
 #include <HydroEXA.H>
+#include <utils/Logging.H>
 
 using namespace amrex;
 
@@ -30,7 +32,7 @@ int main(int argc, char* argv[]){
         if (hydroexa.Verbose()) {
             // print wallclock time
             ParallelDescriptor::ReduceRealMax(end_total ,ParallelDescriptor::IOProcessorNumber());
-            amrex::Print() << "\nTotal Time: " << end_total << '\n';
+            LOG(INFO, "\nTotal Time: " + std::to_string(end_total) + '\n');
         }
     }  // end of scope where Fortran librarys are visible
 

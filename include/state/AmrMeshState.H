@@ -126,8 +126,8 @@ class AmrMeshState : public amrex::AmrCore {
         // Utils
         void ResizeLevels(int nlevs);
 
-    protected: 
         virtual void PostProcessBaseGrids(amrex::BoxArray& box_array) const override;
+        void CheckNaNsAndValidInMultiFab(const amrex::MultiFab& mf, int& global_has_valid, int& global_has_nan, int comp = 0);
 
     private:
         // Internal helper functions for level management
@@ -143,7 +143,6 @@ class AmrMeshState : public amrex::AmrCore {
         
         void TerrainMapStaticToDynamic(int lev);
         void FluidMapStaticToDynamic(int lev);
-        void CheckNaNsAndValidInMultiFab(const amrex::MultiFab& mf, int& global_has_valid, int& global_has_nan, int comp = 0);
 
 
         // Manages all I/O operations (checkpointing, plotfiles, restarts)

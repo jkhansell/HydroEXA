@@ -1,5 +1,6 @@
 #include <AMReX_ParmParse.H>
 #include <HydroEXA.H>
+#include <utils/Logging.H>
 
 HydroEXA::HydroEXA() {
     ReadParameters();
@@ -91,20 +92,20 @@ void HydroEXA::Initialize() {
     // =======================================================================
     // GEOMETRY VERIFICATION DIAGNOSTICS
     // =======================================================================
-    amrex::Print() << "\n============================================================\n"
-                   << "[GEOM DIAGNOSTIC] Verifying HDF5 to AMReX Structural Mapping\n"
-                   << "============================================================\n"
-                   << "  -> Raw HDF5 Resolution      : " << metadata.global_nx << " x " << metadata.global_ny << "\n"
-                   << "  -> HDF5 Explicit Resolution : dx=" << metadata.dx << " m, dy=" << metadata.dy << " m\n"
-                   << "  -> Reference Terrain Level  : " << amr_params.terrain_ref_lev << " (Scale: " << refinement_scale << "x)\n"
-                   << "  -> Target Level 0 Raw Size  : " << base_nx_raw << " x " << base_ny_raw << "\n"
-                   << "  -> Grid Blocking Factor     : " << bf << "\n"
-                   << "  -> Padded Level 0 Cell Count: [" << base_nx << ", " << base_ny << ", " << base_nz << "]\n"
-                   << "  -> Derived Level 0 Cell Spacing: dx=" << level0_dx << " m, dy=" << level0_dy << " m\n"
-                   << "  -> Physical Domain Low Bound: [" << metadata.prob_lo_x << ", " << metadata.prob_lo_y << ", 0.0]\n"
-                   << "  -> ORIGINAL High Bound      : [" << metadata.prob_hi_x << ", " << metadata.prob_hi_y << ", 0.0]\n"
-                   << "  -> EXTENDED Padded High Bound: [" << padded_prob_hi_x << ", " << padded_prob_hi_y << ", 0.0]\n"
-                   << "============================================================\n\n";
+    LOG(INFO, "\n============================================================\n"
+                "[GEOM DIAGNOSTIC] Verifying HDF5 to AMReX Structural Mapping\n"
+                "============================================================\n"
+                "  -> Raw HDF5 Resolution      : " + std::to_string(metadata.global_nx) + " x " + std::to_string(metadata.global_ny) + "\n"
+                "  -> HDF5 Explicit Resolution : dx=" + std::to_string(metadata.dx) + " m, dy=" + std::to_string(metadata.dy) + " m\n"
+                "  -> Reference Terrain Level  : " + std::to_string(amr_params.terrain_ref_lev) + " (Scale: " + std::to_string(refinement_scale) + "x)\n"
+                "  -> Target Level 0 Raw Size  : " + std::to_string(base_nx_raw) + " x " + std::to_string(base_ny_raw) + "\n"
+                "  -> Grid Blocking Factor     : " + std::to_string(bf) + "\n"
+                "  -> Padded Level 0 Cell Count: [" + std::to_string(base_nx) + ", " + std::to_string(base_ny) + ", " + std::to_string(base_nz) + "]\n"
+                "  -> Derived Level 0 Cell Spacing: dx=" + std::to_string(level0_dx) + " m, dy=" + std::to_string(level0_dy) + " m\n"
+                "  -> Physical Domain Low Bound: [" + std::to_string(metadata.prob_lo_x) + ", " + std::to_string(metadata.prob_lo_y) + ", 0.0]\n"
+                "  -> ORIGINAL High Bound      : [" + std::to_string(metadata.prob_hi_x) + ", " + std::to_string(metadata.prob_hi_y) + ", 0.0]\n"
+                "  -> EXTENDED Padded High Bound: [" + std::to_string(padded_prob_hi_x) + ", " + std::to_string(padded_prob_hi_y) + ", 0.0]\n"
+                "============================================================\n\n");
 
     // 4. Package the newly expanded, resolution-safe domain boundaries
     amrex::Vector<amrex::Real> prob_lo = { metadata.prob_lo_x, metadata.prob_lo_y, 0.0 };
