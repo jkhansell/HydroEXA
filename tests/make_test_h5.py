@@ -2,86 +2,97 @@ import h5py
 import numpy as np
 
 # ============================================================
-# DOMAIN SETUP
+# CONFIGURATION
 # ============================================================
-Lx, Ly = 15000.0, 5000.0
-dx, dy = 5.0, 5.0
+filename = "CircularDambreak.h5"
 
-x = np.arange(0, Lx, dx)
-y = np.arange(0, Ly, dy)
-X, Y = np.meshgrid(x, y)
+# Grid Dimensions
+nx, ny = 1024, 1024
+dx, dy = 1.0, 1.0  # 1-meter spatial resolution (200m x 200m domain)
+x_ll, y_ll = 0.0, 0.0
 
-# ============================================================
-# TERRAIN GENERATION (BATHYMETRY)
-# ============================================================
-amplitude, wavelength = 550.0, 3000.0
-centerline = Ly / 2.0 + amplitude * np.sin(2 * np.pi * X / wavelength)
-distance = Y - centerline
+# Physics Parameters
+z_flat = 0.1          # Flat bathymetry across entire domain (m)
+h_inner = 0.6         # High water depth inside circle (m)
+h_outer = 0.1         # Ambient water depth outside circle (m)
+dam_radius = 25.0     # Cylinder radius (m)
 
-channel_depth, channel_sigma = 6.0, 80.0
-channel = channel_depth * np.exp(-(distance**2) / (2 * channel_sigma**2))
-
-eta = 2.0 * (Y - Ly / 2.0) / Ly
-valley = 8.0 * (eta**8)
-
-texture = 0.5 * np.sin(2 * np.pi * X / 250.0) * np.cos(2 * np.pi * Y / 250.0)
-longitudinal = 1.0e-4 * (Lx - X)
-
-# Pure physical topography matrix
-Z_bathymetry = valley + texture + longitudinal - channel
+# Center of the domain
+center_x = (nx * dx) / 2.0
+center_y = (ny * dy) / 2.0
 
 # ============================================================
-# INITIAL FLUID CONDITIONAL SYNTHESIS
+# ALLOCATE ARRAYS
 # ============================================================
-# Let's say initial condition is a steady water surface elevation or a dam breach
-water_surface_height = 12.0 
-h_fluid = np.maximum(0.0, water_surface_height - Z_bathymetry)
+# Fluid: [h, hu, hv]
+fluid_stacked = 0.1*np.ones((3, ny, nx), dtype=np.float64)
 
-# Initialize momentum components (e.g. constant initial discharges downstream)
-hu_fluid = h_fluid * 0.5  # 0.5 m/s initial velocity in X
-hv_fluid = np.zeros_like(h_fluid)
+# Terrain: [Z, Manning_n]
+terrain_stacked = np.zeros((2, ny, nx), dtype=np.float64)
 
-# ============================================================
-# APPLY IRREGULAR NODATA BOUNDARY PRUNING
-# ============================================================
-nodata_value = np.nan
-mask_width = 700.0 
-prune_mask = np.abs(distance) > mask_width
-
-# Prune Bathymetry
-Z_bathymetry[prune_mask] = nodata_value
-
-# Prune Fluid arrays (Dry/Inactive states inside masked wall domains)
-h_fluid[prune_mask] = nodata_value
-hu_fluid[prune_mask] = nodata_value
-hv_fluid[prune_mask] = nodata_value
-
-# Stack fluid states into a 3D matrix. Layout: [Component][Y][X]
-# This cleanly translates to multi-component reading layouts
-fluid_stacked = np.stack([h_fluid, hu_fluid, hv_fluid], axis=0)
+# Set uniform bathymetry and zero friction
+terrain_stacked[0, :, :] = z_flat
+terrain_stacked[1, :, :] = 0.0  # Manning n = 0 (frictionless ideal benchmark)
 
 # ============================================================
-# WRITE HDF5 INPUT
+# DEFINE CIRCULAR WATER COLUMN
 # ============================================================
-filename = "simulation_input.h5"
+# Generate cell-center coordinates
+y_coords = (np.arange(ny) + 0.5) * dy
+x_coords = (np.arange(nx) + 0.5) * dx
+xx, yy = np.meshgrid(x_coords, y_coords)
 
+# Distance from domain center
+r_dist = np.sqrt((xx - center_x) ** 2 + (yy - center_y) ** 2)
+
+# Set depth profile
+inside_dam = r_dist <= dam_radius
+fluid_stacked[0, inside_dam] = h_inner
+fluid_stacked[0, ~inside_dam] = h_outer
+
+# Guaranteed rest state
+fluid_stacked[1, :, :] = 0.0  # hu = 0.0
+fluid_stacked[2, :, :] = 0.0  # hv = 0.0
+
+# ============================================================
+# DIAGNOSTICS
+# ============================================================
+print("=" * 60)
+print(f"Dataset File      : {filename}")
+print(f"Domain Extent     : {nx * dx:.1f} m x {ny * dy:.1f} m ({nx}x{ny})")
+print(f"Dam Radius        : {dam_radius:.1f} m (Center at {center_x:.1f}, {center_y:.1f})")
+print(f"Bathymetry Z      : Constant {z_flat:.2f} m")
+print(f"Water Depth (h)   : Inner={h_inner:.2f} m | Outer={h_outer:.2f} m")
+print(f"Momenta (hu, hv)  : Strictly 0.0")
+print("=" * 60)
+
+# ============================================================
+# WRITE HDF5
+# ============================================================
 with h5py.File(filename, "w") as h5f:
-    # 1. Write multi-component 3D Fluid Dataset [Comp][Y][X]
-    dset_fluid = h5f.create_dataset("fluid", data=fluid_stacked, dtype="float64", compression="gzip")
+
+    dset_fluid = h5f.create_dataset(
+        "fluid",
+        data=fluid_stacked,
+        compression="gzip",
+        dtype=np.float64
+    )
     dset_fluid.attrs["dx"] = dx
     dset_fluid.attrs["dy"] = dy
-    dset_fluid.attrs["x_ll"] = 0.0
-    dset_fluid.attrs["y_ll"] = 0.0
-    dset_fluid.attrs["nodata"] = nodata_value
-    
-    # 2. Write 2D Bathymetry Dataset [Y][X]
-    dset_bath = h5f.create_dataset("bathymetry", data=Z_bathymetry, dtype="float64", compression="gzip")
-    dset_bath.attrs["dx"] = dx
-    dset_bath.attrs["dy"] = dy
-    dset_bath.attrs["x_ll"] = 0.0
-    dset_bath.attrs["y_ll"] = 0.0
-    dset_bath.attrs["nodata"] = nodata_value
+    dset_fluid.attrs["x_ll"] = x_ll
+    dset_fluid.attrs["y_ll"] = y_ll
+    dset_fluid.attrs["nodata"] = 0.0
 
-print(f"Generated {filename}")
-print(f"  -> 'fluid' dataset shape: {fluid_stacked.shape} (Components x Rows x Cols)")
-print(f"  -> 'bathymetry' dataset shape: {Z_bathymetry.shape} (Rows x Cols)")
+    dset_terrain = h5f.create_dataset(
+        "terrain",
+        data=terrain_stacked,
+        compression="gzip",
+        dtype=np.float64
+    )
+    dset_terrain.attrs["dx"] = dx
+    dset_terrain.attrs["dy"] = dy
+    dset_terrain.attrs["x_ll"] = x_ll
+    dset_terrain.attrs["y_ll"] = y_ll
+    dset_terrain.attrs["nodata"] = -9999.0
+
+print(f"\nSuccessfully generated '{filename}'.")

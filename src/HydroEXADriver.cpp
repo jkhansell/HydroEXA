@@ -22,9 +22,9 @@ int main(int argc, char* argv[]){
 
         hydroexa.Initialize();  // sets up the mesh state, including geometry, initial conditions, and constructs the solver variant based on the input parameters
 
-        //hydroexa.Compute();     // main time-stepping loop, which calls the solver's compute_fluxes and compute_dt methods at each iteration
+        hydroexa.Compute();     // main time-stepping loop, which calls the solver's compute_fluxes and compute_dt methods at each iteration
 
-        // hydroexa.Finalize();    // any necessary cleanup, output final diagnostics, etc.
+        hydroexa.Finalize();    // any necessary cleanup, output final diagnostics, etc.
 
         // wallclock time
         auto end_total = amrex::second() - strt_total;

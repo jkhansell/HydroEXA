@@ -1,0 +1,18 @@
+# <type>: <short summary under 70 chars>
+#
+# Types: feat, fix, perf, refactor, docs, build, ci, test, chore
+#
+# Body: explain the WHAT and WHY (not WHAT the code does — that's in the diff).
+# Wrap at 72 characters.
+#
+# Footer: references to issues, breaking changes.
+#
+# --- Example ---
+# fix: align BoxArray decomposition in terrain initialization
+#
+# static_ba.maxSize(512) created a box decomposition misaligned with
+# AMR level 0, causing ParallelCopy's spatial lookup to place averaged
+# values at wrong physical positions. Removing the hardcoded maxSize
+# fixes the alignment.
+#
+# Fixes #42

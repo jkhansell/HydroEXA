@@ -7,6 +7,7 @@
 #include <AMReX_MultiFabUtil.H>
 
 #include <io/Checkpointer.H>
+#include <io/CheckpointerContext.H>
 #include <io/PlotFileWriter.H>
 #include <io/HDF5_File.H>
 
@@ -44,28 +45,25 @@ public:
                                      const amrex::Box &bx,
                                      const std::string &dataset_name,
                                      int first_comp,
-                                     int ncomp);
+                                     int ncomp,
+                                     const amrex::Real nodata_val
+                                    );
 
     void ReadHDF5Metadata(const std::string &dataset_name,
                           HDF5SpatialMetadata &meta);
 
     void CloseHDF5();
 
-    void SetCheckpointer(std::unique_ptr<Checkpointer> checkpointer);
-
     void SetPlotfileWriter(std::unique_ptr<PlotfileWriter> writer);
 
-    void WriteCheckpoint(
-        const amrex::Vector<amrex::MultiFab> U,
-        const amrex::Vector<amrex::MultiFab> Terrain,
-        int iteration,
-        double time);
+    void WriteCheckpoint(const CheckpointerContext& ctx, int iteration);
 
     void ReadCheckpoint(
-        amrex::Vector<amrex::MultiFab> &U,
-        amrex::Vector<amrex::MultiFab> &Terrain,
-        double &time,
-        const std::string &checkpoint_file);
+        const CheckpointerContext& ctx,
+        int& iteration,
+        amrex::Real& time,
+        int do_reflux,
+        const std::string& restart_chkfile);
 
     // In your IOHandler class public section:
     void WritePlotfile(
@@ -81,8 +79,12 @@ protected:
     std::unique_ptr<HDF5Reader> hdf5_reader;
 
 private:
-    std::unique_ptr<Checkpointer> checkpointer;
+    Checkpointer checkpointer;
     std::unique_ptr<PlotfileWriter> plotfile_writer;
+    std::string chk_file{"chk"};
+
+public:
+    void SetCheckpointFile(const std::string& chk) { chk_file = chk; }
 };
 
 #endif

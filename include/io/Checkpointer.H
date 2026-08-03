@@ -3,23 +3,23 @@
 
 #include <AMReX_REAL.H>
 #include <string>
-// 1. Forward declaration 
-class AmrMeshState;
+
+#include <io/CheckpointerContext.H>
 
 class Checkpointer
 {
 public:
     void Write(
-        const AmrMeshState &state,
+        const CheckpointerContext& ctx,
         int iteration,
         amrex::Real time,
-        const std::string &chkfile);
+        const std::string& chk_file);
 
     void Read(
-        AmrMeshState& state, 
-        int& iteration, 
-        amrex::Real& time, 
-        int do_reflux, 
+        const CheckpointerContext& ctx,
+        int& iteration,
+        amrex::Real& time,
+        int do_reflux,
         const std::string& restart_chkfile);
 };
 

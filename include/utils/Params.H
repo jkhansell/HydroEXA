@@ -8,9 +8,10 @@
 // Parameter Groups
 // ============================================================================
 
-struct RuntimeParameters 
+struct RuntimeParameters
 {
     amrex::Real etime{0.0};       // Current physical simulation time
+    amrex::Real max_time{1.0};    // Simulation stop time (physical time)
     int iteration{0};             // Iteration counter
 };
 
@@ -24,7 +25,6 @@ struct IOParameters
     std::string plot_file{"plt"};             // Plotfile prefix
     std::string chk_file{"chk"};              // Checkpoint file prefix
     std::string input_file{"input.h5"};       // HDF5 file containing initial conditions (e.g., DEM)
-    std::string dataset_name{"swe_data"};     // HDF5 file containing dataset name
     std::string restart_chkfile{"restart"};   // Checkpoint file to restart from (empty means no restart)
 };
 

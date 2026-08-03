@@ -43,7 +43,7 @@ public:
         amrex::Error(msg);
     }
 
-private:
+public:
     Logger() : m_verbosity(0) {
         amrex::ParmParse pp("HydroEXA");
         pp.query("log_verbosity", m_verbosity);

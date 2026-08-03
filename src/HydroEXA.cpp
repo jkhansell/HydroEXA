@@ -18,7 +18,6 @@ void HydroEXA::ReadParameters() {
         pp.query("async_io", io_params.async_io);    // bool for whether to do asynchronous I/O
         
         pp.query("input_file", io_params.input_file);  // HDF5 file containing initial conditions (e.g., DEM)
-        pp.query("dataset_name", io_params.dataset_name);  // HDF5 file containing initial conditions (e.g., DEM)
         pp.query("plot_file", io_params.plot_file);
         pp.query("chk_file", io_params.chk_file);
         
@@ -38,11 +37,10 @@ void HydroEXA::ReadParameters() {
     }
 
     {
-        // read in an array of thresholds for the gradients of umag and h, which are the tagging threshold
         amrex::ParmParse pp("HydroEXA");
-
         pp.query("model", physics_params.model);
         pp.query("cfl", physics_params.cfl);
+        pp.query("max_time", runtime_params.max_time);
 
         int n = pp.countval("h_grad_thresh");
         if (n > 0) {
@@ -66,7 +64,7 @@ void HydroEXA::Initialize() {
     IO = std::make_shared<IOHandler>(io_params.input_file);
     HDF5SpatialMetadata metadata;
 
-    IO->ReadHDF5Metadata(io_params.dataset_name, metadata);
+    IO->ReadHDF5Metadata("terrain", metadata);
     
     int refinement_scale = 1 << amr_params.terrain_ref_lev;
     int base_nx_raw = metadata.global_nx / refinement_scale;
@@ -132,8 +130,64 @@ void HydroEXA::Initialize() {
 void
 HydroEXA::Compute() {
     BL_PROFILE("HydroEXA::Compute");
-    
 
+    amrex::Real plot_time_next = (io_params.plot_freq > 0) ? io_params.plot_freq : -1.0;
+    amrex::Real chk_time_next  = (io_params.chk_freq  > 0) ? io_params.chk_freq  : -1.0;
+    int plot_iter = 0;
+    int chk_iter  = 0;
+
+    MeshState->WritePlotfile(plot_iter, runtime_params.etime);
+
+
+    while (runtime_params.etime < runtime_params.max_time)
+    {
+        const double wall_start = amrex::ParallelDescriptor::second();
+
+        // CFL
+        MeshState->ComputeDt();
+
+        // Advance
+        MeshState->TimeStepWithSubcycling(0, runtime_params.etime, runtime_params.iteration);
+
+        runtime_params.etime = MeshState->t_new[0];
+        runtime_params.iteration++;
+
+        const double wall_end = amrex::ParallelDescriptor::second();
+
+        if (Verbose() && amrex::ParallelDescriptor::IOProcessor())
+        {
+            LOG(INFO,
+                "[Step "
+                + std::to_string(runtime_params.iteration)
+                + "]"
+                + " t=" + std::to_string(runtime_params.etime)
+                + "  dt=" + std::to_string(MeshState->dt[0])
+                + "  wall=" + std::to_string(wall_end - wall_start) + " s\n");
+        }
+
+        // Plotfiles
+        if (io_params.plot_freq > 0 &&
+            runtime_params.etime >= plot_time_next)
+        {
+            MeshState->WritePlotfile(plot_iter, runtime_params.etime);
+            plot_time_next += io_params.plot_freq;
+            plot_iter++;
+        }
+
+        // Checkpoints
+        if (io_params.chk_freq > 0 &&
+            runtime_params.etime >= chk_time_next)
+        {
+            MeshState->WriteCheckpoint();
+            chk_time_next += io_params.chk_freq;
+            chk_iter++;
+        }
+    }
+
+    if (Verbose()) {
+        LOG(INFO, "\nSimulation complete: t = " + std::to_string(runtime_params.etime)
+               + " (" + std::to_string(runtime_params.iteration) + " coarse steps)\n");
+    }
 }
 
 void 

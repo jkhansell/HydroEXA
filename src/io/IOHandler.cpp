@@ -1,6 +1,7 @@
 
 // STD includes
 #include <string>
+#include <fstream>
 
 // HDF5
 #include <hdf5.h>
@@ -8,6 +9,7 @@
 // AMReX includes
 #include <AMReX_ParallelDescriptor.H>
 #include <AMReX_PlotFileUtil.H>
+#include <AMReX_VisMF.H>
 
 // local includes
 #include <io/IOHandler.H>
@@ -125,10 +127,10 @@ void IOHandler::ReadHDF5HyperslabComponents(
     const amrex::Box &bx,
     const std::string &dataset_name,
     int first_comp,
-    int ncomp)
+    int ncomp,
+    const amrex::Real nodata_val
+)
 {
-
-    const amrex::Real nodata_val = -9999;
 
     const int i_lo = bx.smallEnd(0);
     const int j_lo = bx.smallEnd(1);
@@ -384,6 +386,19 @@ void IOHandler::WritePlotfile(
         time,
         istep,
         ref_ratio);     
+}
 
-    LOG(INFO, "Plotfile write finalized cleanly on disk.");
+void IOHandler::WriteCheckpoint(const CheckpointerContext& ctx, int iteration)
+{
+    checkpointer.Write(ctx, iteration, ctx.t_new[0], chk_file);
+}
+
+void IOHandler::ReadCheckpoint(
+    const CheckpointerContext& ctx,
+    int& iteration,
+    amrex::Real& time,
+    int do_reflux,
+    const std::string& restart_chkfile)
+{
+    checkpointer.Read(ctx, iteration, time, do_reflux, restart_chkfile);
 }

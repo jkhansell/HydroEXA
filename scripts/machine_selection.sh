@@ -42,6 +42,33 @@ set_machine_env() {
             "
             ;;
 
+        kabreV100.gpu)
+            export CC=mpicc
+            export CXX=mpicxx
+            export FC=mpif90
+
+            GPU_FLAGS="
+                -DCMAKE_CUDA_ARCHITECTURES=70
+                -DAMReX_GPU_BACKEND=CUDA
+                -DAMReX_CUDA_ARCH=7.0
+                -DAMReX_GPU_RDC=ON
+            "
+            ;;
+
+        kabreL40S.gpu)
+            export CC=mpicc
+            export CXX=mpicxx
+            export FC=mpif90
+
+            GPU_FLAGS="
+                -DCMAKE_CUDA_ARCHITECTURES=89
+                -DAMReX_GPU_BACKEND=CUDA
+                -DAMReX_CUDA_ARCH=8.9
+                -DAMReX_GPU_RDC=ON
+            "
+            ;;
+
+
         juwelsbooster.cpu)
             export CC=mpicc
             export CXX=mpicxx

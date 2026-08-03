@@ -132,7 +132,6 @@ def plot_amrex_grid(
 
     data = covering_grid[("boxlib", variable_name)].to_ndarray()
     data = np.squeeze(data).T
-    data[data < 0.1] = np.nan
 
     x = np.linspace(left_edge[0], right_edge[0], dims[0])
     y = np.linspace(left_edge[1], right_edge[1], dims[1])
@@ -183,18 +182,22 @@ def plot_amrex_grid(
     print(f"[YT] Saved: {output_file}")
 
 
-#plot_amrex_grid(
-#    "plt00000",
-#    variable_name="h_fluid",
-#    cbar_label="Water Depth",
-#    title="Water Depth with AMR Levels",
-#    output_file="h_fluid.png",
-#    figsize=(16, 15),
-#    cmap="jet"
-#)
+import sys
+
+pltfile = sys.argv[1]
 
 plot_amrex_grid(
-    "plt00000",
+    pltfile,
+    variable_name="h_fluid",
+    cbar_label="Water Depth",
+    title="Water Depth with AMR Levels",
+    output_file="h_fluid.png",
+    figsize=(16, 15),
+    cmap="jet"
+)
+
+plot_amrex_grid(
+    pltfile,
     variable_name="z_bathymetry",
     cbar_label="Bed Elevation",
     title="Bed Elevation with AMR Levels",

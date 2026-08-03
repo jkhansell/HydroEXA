@@ -1,96 +1,128 @@
 import h5py
 import numpy as np
 import rasterio
+from scipy.ndimage import uniform_filter, distance_transform_edt
 
 # ============================================================
-# READ INPUT TIFF (BATHYMETRY / TOPO)
+# INPUT / OUTPUT CONFIG
 # ============================================================
-tiff_filename = "/lustre/orion/geo161/scratch/jkhansell/rasterization_CR/geooutputs/Puntos_Cartago_Heredia_SJ_San_Jose.tif"  # Change to your actual TIFF path
-filename = "SJ.h5"
+tiff_filename = "/data/jovillalobos/CFD/data/rasterization_CR/geooutputs/Puntos_Alajuela_Alajuela.tif"
+filename = "Alajuela.h5"
 
+default_water_depth = 2.0  # meters in detected rivers/valleys
+fluid_nodata = 0.0          # Fluid initialized to 0.0 for safe C++ state handling
+terrain_nodata = -9999.0    # Bathymetry NODATA flag
 
+# ============================================================
+# READ TERRAIN
+# ============================================================
 with rasterio.open(tiff_filename) as src:
-    # Read the first band as the bathymetry array [Y][X]
-    Z_bathymetry = src.read(1).astype("float64")
+    Z_bathymetry = src.read(1).astype(np.float64)
 
-    # === ADD THIS LINE TO FLIP THE Y-AXIS ===
-    Z_bathymetry = Z_bathymetry[::-1, :] 
+    # Flip Y to match AMReX Cartesian coordinate convention (Y=0 at bottom)
+    Z_bathymetry = Z_bathymetry[::-1, :]
 
-    # Extract spatial resolution
-    dx = float(src.transform[0])
-    dy = float(abs(src.transform[4]))
+    dx = float(src.transform.a)
+    dy = float(abs(src.transform.e))
 
-    # === EXTRACT TRUE GEOSPATIAL COORDINATES ===
-    # src.transform[2] is the exact Western (Left) edge: X_ll
-    x_ll = float(src.transform[2])
-    
-    # src.transform[5] is the Northern (Top) edge. Since we flipped the array 
-    # to orient from the bottom up, the new lower-left Y is the original top 
-    # minus the total physical height of the image.
-    y_ul = float(src.transform[5])
-    total_height_m = Z_bathymetry.shape[0] * dy
-    y_ll = float(y_ul - total_height_m)
+    x_ll = float(src.transform.c)
+    y_ul = float(src.transform.f)
+    y_ll = y_ul - Z_bathymetry.shape[0] * dy
 
-    # Handle nodata values dynamically from the TIFF
-    tiff_nodata = -9999
+    tiff_nodata = src.nodata
+    if tiff_nodata is None:
+        tiff_nodata = -9999.0
 
 # ============================================================
-# INITIAL FLUID CONDITIONAL SYNTHESIS
+# VALID TERRAIN MASK
 # ============================================================
-# Create a mask for valid vs invalid terrain data
-valid_mask = ~np.isnan(Z_bathymetry) if np.isnan(tiff_nodata) else (Z_bathymetry != tiff_nodata)
+if np.isnan(tiff_nodata):
+    valid_mask = ~np.isnan(Z_bathymetry)
+else:
+    valid_mask = (Z_bathymetry != tiff_nodata) & np.isfinite(Z_bathymetry)
 
-# === DYNAMIC WATER SURFACE HEIGHT FIX ===
-# San José elevations are >1000m. We grab the lowest elevation point in your valid data
-# and set the water level to be 5.0 meters above that baseline. 
-# (Adjust the + 5.0 offset or replace with a flat contour like 1200.0 depending on your test case needs)
-lowest_point = np.nanmin(Z_bathymetry[valid_mask])
-water_surface_height = lowest_point + 5.0
-
-# Initialize fluid states with safe fallbacks
-h_fluid = np.full_like(Z_bathymetry, np.nan)
-hu_fluid = np.full_like(Z_bathymetry, np.nan)
-hv_fluid = np.full_like(Z_bathymetry, np.nan)
-
-# Compute fluid parameters ONLY where terrain data is valid
-h_fluid[valid_mask] = np.maximum(0.0, water_surface_height - Z_bathymetry[valid_mask])
-hu_fluid[valid_mask] = h_fluid[valid_mask] * 0.0 # 0.5 m/s downstream velocity
-hv_fluid[valid_mask] = 0.0
-
-# Stack fluid states into a 3D matrix. Layout: [Component][Y][X]
-fluid_stacked = np.stack([h_fluid, hu_fluid, hv_fluid], axis=0)
-
-# Target HDF5 nodata value (using standard np.nan as per your original format)
-hdf5_nodata = np.nan
+ny, nx = Z_bathymetry.shape
 
 # ============================================================
-# WRITE HDF5 INPUT
+# BOUNDARY-SAFE GRADIENT & TPI ANALYSIS
 # ============================================================
+# 1. Fill invalid cells using distance transform to prevent boundary gradient artifacts
+indices = distance_transform_edt(~valid_mask, return_distances=False, return_indices=True)
+Z_filled = Z_bathymetry[tuple(indices)]
 
+# 2. Compute spatial elevation gradients
+dZ_dy, dZ_dx = np.gradient(Z_filled, dy, dx)
+grad_mag = np.sqrt(dZ_dx**2 + dZ_dy**2)
+grad_mag[~valid_mask] = 0.0
+
+# 3. Compute Normalized Local Topographic Position Index (TPI)
+neighborhood_size = 31
+
+valid_weights = valid_mask.astype(np.float64)
+Z_weighted = np.where(valid_mask, Z_bathymetry, 0.0)
+
+sum_Z = uniform_filter(Z_weighted, size=neighborhood_size, mode='constant', cval=0.0)
+sum_w = uniform_filter(valid_weights, size=neighborhood_size, mode='constant', cval=0.0)
+
+# SAFE DIVISION (fixes division-by-zero warnings)
+mean_neighborhood = np.copy(Z_bathymetry)
+np.divide(sum_Z, sum_w, out=mean_neighborhood, where=(sum_w > 0))
+
+tpi = np.zeros_like(Z_bathymetry)
+tpi[valid_mask] = Z_bathymetry[valid_mask] - mean_neighborhood[valid_mask]
+
+# ============================================================
+# SELECT RIVER VALLEYS
+# ============================================================
+tpi_threshold = np.percentile(tpi[valid_mask], 15)
+water_mask = (tpi < tpi_threshold) & valid_mask
+
+if water_mask.sum() == 0:
+    water_mask = (tpi < np.percentile(tpi[valid_mask], 10)) & valid_mask
+
+# ============================================================
+# ALLOCATE & INITIALIZE ARRAYS
+# ============================================================
+fluid_stacked = np.full((3, ny, nx), fluid_nodata, dtype=np.float64)
+fluid_stacked[0, water_mask] = default_water_depth
+fluid_stacked[1, valid_mask] = 0.0  # hu = 0.0
+fluid_stacked[2, valid_mask] = 0.0  # hv = 0.0
+
+terrain_stacked = np.full((2, ny, nx), terrain_nodata, dtype=np.float64)
+terrain_stacked[0, valid_mask] = Z_bathymetry[valid_mask]
+terrain_stacked[1, valid_mask] = 0.0  # Friction / Manning's n
+
+# ============================================================
+# DIAGNOSTICS
+# ============================================================
+print("=" * 60)
+print(f"Grid size         : {nx} x {ny}")
+print(f"dx, dy            : {dx:.3f}, {dy:.3f} m")
+print(f"Terrain min/max   : {Z_bathymetry[valid_mask].min():.2f} m / {Z_bathymetry[valid_mask].max():.2f} m")
+print(f"Valid cells       : {valid_mask.sum()}")
+print(f"Wet River cells   : {water_mask.sum()}")
+print(f"Max Gradient mag  : {grad_mag[valid_mask].max():.4f} m/m")
+print(f"Fluid NODATA val  : {fluid_nodata}")
+print(f"Terrain NODATA val: {terrain_nodata}")
+print("=" * 60)
+
+# ============================================================
+# WRITE HDF5
+# ============================================================
 with h5py.File(filename, "w") as h5f:
-    # 1. Write multi-component 3D Fluid Dataset [Comp][Y][X]
-    dset_fluid = h5f.create_dataset(
-        "fluid", data=fluid_stacked, dtype="float64", compression="gzip"
-    )
+
+    dset_fluid = h5f.create_dataset("fluid", data=fluid_stacked, compression="gzip", dtype=np.float64)
     dset_fluid.attrs["dx"] = dx
     dset_fluid.attrs["dy"] = dy
     dset_fluid.attrs["x_ll"] = x_ll
     dset_fluid.attrs["y_ll"] = y_ll
-    dset_fluid.attrs["nodata"] = hdf5_nodata
+    dset_fluid.attrs["nodata"] = fluid_nodata
 
-    # 2. Write 2D Bathymetry Dataset [Y][X]
-    dset_bath = h5f.create_dataset(
-        "bathymetry", data=Z_bathymetry, dtype="float64", compression="gzip"
-    )
-    
-    dset_bath.attrs["dx"] = dx
-    dset_bath.attrs["dy"] = dy
-    dset_bath.attrs["x_ll"] = x_ll
-    dset_bath.attrs["y_ll"] = y_ll
-    dset_bath.attrs["nodata"] = hdf5_nodata
+    dset_terrain = h5f.create_dataset("terrain", data=terrain_stacked, compression="gzip", dtype=np.float64)
+    dset_terrain.attrs["dx"] = dx
+    dset_terrain.attrs["dy"] = dy
+    dset_terrain.attrs["x_ll"] = x_ll
+    dset_terrain.attrs["y_ll"] = y_ll
+    dset_terrain.attrs["nodata"] = terrain_nodata
 
-print(f"Generated {filename} successfully from {tiff_filename}")
-print(f"  -> Dynamic Water Level: {water_surface_height:.2f} m (Lowest Terrain Point: {lowest_point:.2f} m)")
-print(f"  -> Extracted metadata: dx={dx}, dy={dy}, x_ll={x_ll}, y_ll={y_ll}")
-print(f"  -> 'fluid' dataset shape: {fluid_stacked.shape} (Components x Rows x Cols)")
-print(f"  -> 'bathymetry' dataset shape: {Z_bathymetry.shape} (Rows x Cols)")
+print(f"\nSuccessfully generated '{filename}' with zero division warnings.")

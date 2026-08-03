@@ -19,10 +19,16 @@ plt*
 **/[Ii]nstall*/
 **/[Bb]acktrace.0
 **/[Ee]rr.log
+**/[Ll]og.log
 **/*.h5
 tests/**/*.png
 tests/**/*.h5
-
+**/logs
+logs
+.claude
+.mcp.json
+.codegraph
+**/tests/*.png
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

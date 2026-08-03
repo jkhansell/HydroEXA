@@ -17,8 +17,8 @@ void roeSolver(
 ) {
 
     // --- dry handling ---
-    hi = (hi >= Tolerances::TOLDRY) ? hi : 0.0;
-    hj = (hj >= Tolerances::TOLDRY) ? hj : 0.0;
+    hi = (hi >= Tolerances::TOLDRY()) ? hi : 0.0;
+    hj = (hj >= Tolerances::TOLDRY()) ? hj : 0.0;
 
     amrex::Real sqrt_i = (hi > 0.0) ? std::sqrt(hi) : 0.0;
     amrex::Real sqrt_j = (hj > 0.0) ? std::sqrt(hj) : 0.0;
@@ -38,10 +38,10 @@ void roeSolver(
     amrex::Real vhatj = -uj * ny + vj * nx;
 
     // --- Roe averages ---
-    amrex::Real htilde = (0.5 * (hi + hj) > Tolerances::TOLDRY) ? 0.5 * (hi + hj) : Tolerances::TOLDRY;
-    amrex::Real ctilde = std::sqrt(PhysConstants::GRAV * htilde);
+    amrex::Real htilde = (0.5 * (hi + hj) > Tolerances::TOLDRY()) ? 0.5 * (hi + hj) : Tolerances::TOLDRY();
+    amrex::Real ctilde = std::sqrt(PhysConstants::GRAV() * htilde);
 
-    amrex::Real denom_sqrt = sqrt_i + sqrt_j + Tolerances::TOL12;
+    amrex::Real denom_sqrt = sqrt_i + sqrt_j + Tolerances::TOL12();
 
     amrex::Real utilde = (uhati * sqrt_i + uhatj * sqrt_j) / denom_sqrt;
     amrex::Real vtilde = (vhati * sqrt_i + vhatj * sqrt_j) / denom_sqrt;
@@ -55,16 +55,16 @@ void roeSolver(
 
     // --- entropy fix ---
     {
-        amrex::Real ei = uhati - std::sqrt(PhysConstants::GRAV * hi);
-        amrex::Real ej = uhatj - std::sqrt(PhysConstants::GRAV * hj);
+        amrex::Real ei = uhati - std::sqrt(PhysConstants::GRAV() * hi);
+        amrex::Real ej = uhatj - std::sqrt(PhysConstants::GRAV() * hj);
 
         if (ei < 0.0 && ej > 0.0) {
             lambdaE0 = lambda0 - ei * (ej - lambda0) / (ej - ei);
             lambda0  = ei * (ej - lambda0) / (ej - ei);
         }
 
-        ei = uhati + std::sqrt(PhysConstants::GRAV * hi);
-        ej = uhatj + std::sqrt(PhysConstants::GRAV * hj);
+        ei = uhati + std::sqrt(PhysConstants::GRAV() * hi);
+        ej = uhatj + std::sqrt(PhysConstants::GRAV() * hj);
 
         if (ei < 0.0 && ej > 0.0) {
             lambdaE2 = lambda2 - ej * (lambda2 - ei) / (ej - ei);
@@ -72,7 +72,7 @@ void roeSolver(
         }
     }
 
-    amrex::Real denom = 2.0 * ctilde + Tolerances::TOL12;
+    amrex::Real denom = 2.0 * ctilde + Tolerances::TOL12();
 
     // --- differences ---
     amrex::Real dh  = hj - hi;
@@ -92,7 +92,7 @@ void roeSolver(
     amrex::Real thrust, tau;
 	
     {
-        amrex::Real thrust_a = -PhysConstants::GRAV * htilde * dz;
+        amrex::Real thrust_a = -PhysConstants::GRAV() * htilde * dz;
 
         amrex::Real dztilde;
         if ((dz >= 0.0) && (di < zj)) {
@@ -105,7 +105,7 @@ void roeSolver(
 
         amrex::Real hr = (dz >= 0.0) ? hi : hj;
 
-        amrex::Real thrust_b = -PhysConstants::GRAV * (hr - 0.5 * std::abs(dztilde)) * dztilde;
+        amrex::Real thrust_b = -PhysConstants::GRAV() * (hr - 0.5 * std::abs(dztilde)) * dztilde;
 
         thrust = ((dz * dd >= 0.0) && (utilde * dz > 0.0))
                         ? std::max(thrust_a, thrust_b)
@@ -116,9 +116,9 @@ void roeSolver(
         amrex::Real sf = (ntilde * ntilde *
                     std::sqrt(utilde * utilde + vtilde * vtilde) *
                     utilde) /
-                    std::max(Tolerances::TOLDRY, htilde * std::cbrt(htilde));
+                    std::max(Tolerances::TOLDRY(), htilde * std::cbrt(htilde));
 
-        tau = PhysConstants::GRAV * htilde * sf * dx;
+        tau = PhysConstants::GRAV() * htilde * sf * dx;
     }
 	
     amrex::Real beta0 = (thrust - tau) / denom;
@@ -127,8 +127,8 @@ void roeSolver(
 
     {
         // compute stars (short lifetime)
-        const amrex::Real lambda0_safe = (std::abs(lambda0) > Tolerances::TOL12) ? lambda0 : (lambda0 >= 0.0 ? Tolerances::TOL12 : -Tolerances::TOL12);
-        const amrex::Real lambda2_safe = (std::abs(lambda2) > Tolerances::TOL12) ? lambda2 : (lambda2 >= 0.0 ? Tolerances::TOL12 : -Tolerances::TOL12);
+        const amrex::Real lambda0_safe = (std::abs(lambda0) > Tolerances::TOL12()) ? lambda0 : (lambda0 >= 0.0 ? Tolerances::TOL12() : -Tolerances::TOL12());
+        const amrex::Real lambda2_safe = (std::abs(lambda2) > Tolerances::TOL12()) ? lambda2 : (lambda2 >= 0.0 ? Tolerances::TOL12() : -Tolerances::TOL12());
 
         const amrex::Real h_i1star = hi + alpha0 - (beta0 / lambda0_safe);
         const amrex::Real h_j3star = hj - alpha2 + (beta2 / lambda2_safe);
@@ -137,17 +137,17 @@ void roeSolver(
         amrex::Real maxlam = std::abs(lambda0);
         maxlam = std::max(maxlam, std::abs(lambda1));
         maxlam = std::max(maxlam, std::abs(lambda2));
-        const amrex::Real loc_dt = dx / (maxlam + Tolerances::TOL12);
+        const amrex::Real loc_dt = dx / (maxlam + Tolerances::TOL12());
 
         const amrex::Real denom1 = hi - h_i1star;
-        const amrex::Real denom1_safe = (std::abs(denom1) > Tolerances::TOL12) ? denom1 : (denom1 >= 0.0 ? Tolerances::TOL12 : -Tolerances::TOL12);
+        const amrex::Real denom1_safe = (std::abs(denom1) > Tolerances::TOL12()) ? denom1 : (denom1 >= 0.0 ? Tolerances::TOL12() : -Tolerances::TOL12());
         const amrex::Real denom3 = hj - h_j3star;
-        const amrex::Real denom3_safe = (std::abs(denom3) > Tolerances::TOL12) ? denom3 : (denom3 >= 0.0 ? Tolerances::TOL12 : -Tolerances::TOL12);
+        const amrex::Real denom3_safe = (std::abs(denom3) > Tolerances::TOL12()) ? denom3 : (denom3 >= 0.0 ? Tolerances::TOL12() : -Tolerances::TOL12());
 
         const double dt1star = (dx * 0.5 / lambda0_safe) * (hi / denom1_safe);
         const double dt3star = (dx * 0.5 / lambda2_safe) * (hj / denom3_safe);
 
-        if ((h_i1star < -Tolerances::TOLDRY) && (h_j3star > Tolerances::TOLDRY) && (dt1star < loc_dt)) {
+        if ((h_i1star < -Tolerances::TOLDRY()) && (h_j3star > Tolerances::TOLDRY()) && (dt1star < loc_dt)) {
             const double beta1min = -(hi + alpha0) * std::abs(lambda0);
             const double beta3min = -(hj - alpha2) * lambda2;
 
@@ -157,7 +157,7 @@ void roeSolver(
             beta2 = -beta0;
         }
 
-        if ((h_i1star > Tolerances::TOLDRY) && (h_j3star < -Tolerances::TOLDRY) && (dt3star < loc_dt)) {
+        if ((h_i1star > Tolerances::TOLDRY()) && (h_j3star < -Tolerances::TOLDRY()) && (dt3star < loc_dt)) {
             const double beta1min = -(hi + alpha0) * std::abs(lambda0);
             const double beta3min = -(hj - alpha2) * lambda2;
 
@@ -175,8 +175,8 @@ void roeSolver(
 
     // Initialize physical center-flux component
     F[0] = 0.5 * (hi * uhati + hj * uhatj);
-    F[1] = 0.5 * (hi * uhati * uhati + 0.5 * PhysConstants::GRAV * hi * hi +
-                  hj * uhatj * uhatj + 0.5 * PhysConstants::GRAV * hj * hj);
+    F[1] = 0.5 * (hi * uhati * uhati + 0.5 * PhysConstants::GRAV() * hi * hi +
+                  hj * uhatj * uhatj + 0.5 * PhysConstants::GRAV() * hj * hj);
     F[2] = 0.5 * (hi * uhati * vhati + hj * uhatj * vhatj);
 
     // --- Compute Wave Contributions ---
@@ -194,7 +194,7 @@ void roeSolver(
         F[0] -= flux * e0; 
         F[1] -= flux * e1; 
         F[2] -= flux * e2;
-
+    
         // Symmetric Upwind Distribution of Source Terms
         if (lambda_k > 0.0) { 
             S_minus[0] += beta_k * e0;

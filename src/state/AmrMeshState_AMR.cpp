@@ -1,228 +1,10 @@
-
-
 #include <state/AmrMeshState.H>
-#include <boundaries/EmptyFill.H>
-
 #include <utils/MaskedAverageDown.H>
+#include <boundaries/EmptyFill.H>
 #include <utils/Logging.H>
 
 
-AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
-                           int terrain_ref_lev, 
-                           HDF5SpatialMetadata& meta,
-                           std::string input,
-                           RuntimeParameters runtime_params,
-                           IOParameters io_params,
-                           AMRParameters amr_params,
-                           PhysicsParameters physics_params,
-                           /*AmrCore params*/
-                           const amrex::RealBox& rb, 
-                           int max_level_in,
-                           const amrex::Vector<int>& n_cell_in, 
-                           int coord,
-                           const amrex::Vector<amrex::IntVect>& ref_ratios)
-    : amrex::AmrCore(&rb, max_level_in, n_cell_in, coord, ref_ratios),
-      IO(io_handler),
-      static_terrain_lev(terrain_ref_lev), 
-      metadata(meta), 
-      hdf5_path(input),
-      ncomp_U(3),
-      ngrow_U(1),
-      ncomp_Terrain(1),
-      ngrow_Terrain(1), 
-      runtime_p(runtime_params), 
-      io_p(io_params), 
-      amr_p(amr_params), 
-      physics_p(physics_params) 
-{
-    // 2. Resize containers dynamically
-    ResizeLevels(max_level + 1); // Resizes all variables
-    U_bcs.resize(ncomp_U);
-    Terrain_bcs.resize(ncomp_Terrain);
-
-    const auto& period = geom[0].periodicity();
-
-    // 3. Populate fluid boundary conditions record tracking
-    for (int comp = 0; comp < ncomp_U; ++comp) 
-    {
-        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) 
-        {
-            if (period.isPeriodic(idim)) 
-            {
-                U_bcs[comp].setLo(idim, amrex::BCType::int_dir);
-                U_bcs[comp].setHi(idim, amrex::BCType::int_dir);
-            } 
-            else 
-            {
-                U_bcs[comp].setLo(idim, amrex::BCType::ext_dir);
-                U_bcs[comp].setHi(idim, amrex::BCType::ext_dir);
-            }
-        }
-    }
-    
-    // 4. Populate terrain boundary conditions records (foextrap or int_dir if periodic)
-    for (int comp = 0; comp < ncomp_Terrain; ++comp) 
-    {
-        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) 
-        {
-            if (period.isPeriodic(idim)) 
-            {
-                Terrain_bcs[comp].setLo(idim, amrex::BCType::int_dir);
-                Terrain_bcs[comp].setHi(idim, amrex::BCType::int_dir);
-            }
-            else
-            {
-                Terrain_bcs[comp].setLo(idim, amrex::BCType::foextrap);
-                Terrain_bcs[comp].setHi(idim, amrex::BCType::foextrap);
-            }
-        }
-    }
-}
-
-
-void AmrMeshState::ResizeLevels(int nlevs) {
-    U_new.resize(nlevs);
-    U_old.resize(nlevs);
-    DynamicTerrain.resize(nlevs);
-
-    t_new.resize(nlevs);
-    t_old.resize(nlevs);
-    dt.resize(nlevs);
-
-    flux_reg.resize(nlevs);
-}
-
-
-void AmrMeshState::Initialize() {
-    
-    amrex::Real time = 0.0;
-    int initial_step = 0;
-
-    if (restart_chkfile == "") {
-        // start simulation from the beginning
-
-        InitializeSolver();
-        InitializeTerrainFluid();
-        InitFromScratch(time); // Calls PostProcessBaseGrids to prune the mesh using NODATA
-        //PostInit(); // Post Init Routine to fill lev < static_terrain_lev
-
-        // deallocating initial static fluid MultiFab pointer since we
-        // already allocated the initial DynamicFluid Multifab and now refinement or coarsening
-        // is tackled by physics
-        StaticFluid.reset();
-    }
-
-    IO->WritePlotfile(
-        U_new, DynamicTerrain, 
-        initial_step, time, 
-        Geom(), refRatio(), 
-        finest_level
-    );
-}
-
-void AmrMeshState::CheckNaNsAndValidInMultiFab(const amrex::MultiFab& mf, int& global_has_valid, int& global_has_nan, int comp)
-{
-    BL_PROFILE("CheckNaNsAndValidInMultiFab");
-
-    int local_has_valid = 0;
-    int local_has_nan   = 0;
-
-    // Simultaneously check for ANY valid cells AND ANY NaN cells
-    amrex::ReduceOps<amrex::ReduceOpMax, amrex::ReduceOpMax> reduce_op;
-    amrex::ReduceData<int, int> reduce_data(reduce_op);
-    using ReduceTuple = decltype(reduce_data)::Type;
-
-    // Iterate through available valid tiles
-    for (amrex::MFIter mfi(mf); mfi.isValid(); ++mfi)
-    {
-        const amrex::Box& bx = mfi.tilebox();
-        auto const& fab_arr = mf.const_array(mfi);
-
-        reduce_op.eval(bx, reduce_data,
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept -> ReduceTuple
-        {
-            amrex::Real val = fab_arr(i, j, k, comp);
-            int is_nan   = amrex::isnan(val) ? 1 : 0;
-            int is_valid = !is_nan ? 1 : 0;
-            
-            return {is_valid, is_nan};
-        });
-    }
-
-    // Accumulate the findings locally for this rank
-    ReduceTuple local_tuple = reduce_data.value();
-    local_has_valid = amrex::get<0>(local_tuple);
-    local_has_nan   = amrex::get<1>(local_tuple);
-
-    // Sync state flags globally across all MPI ranks
-    global_has_valid = local_has_valid;
-    global_has_nan   = local_has_nan;
-    amrex::ParallelDescriptor::ReduceIntMax(global_has_valid);
-    amrex::ParallelDescriptor::ReduceIntMax(global_has_nan);
-}
-
-void AmrMeshState::InitializeTerrainFluid() {
-
-    amrex::IntVect dom_lo(AMREX_D_DECL(0, 0, 0));
-    amrex::IntVect dom_hi(AMREX_D_DECL(metadata.global_nx - 1, metadata.global_ny - 1, 0));
-    amrex::Box domain(dom_lo, dom_hi);
-
-    // 1. Define the dedicated Geometry for the Static Terrain.
-    // We borrow the physical bounding box (RealBox), coordinate system, 
-    // and periodicity from the base AMR level (Level 0) so they perfectly align in physical space.
-    amrex::Vector<amrex::Real> prob_lo = { metadata.prob_lo_x, metadata.prob_lo_y, 0.0 };
-    amrex::Vector<amrex::Real> prob_hi = { metadata.prob_hi_x, metadata.prob_hi_y, 0.0 }; 
-    amrex::RealBox rb(prob_lo.data(), prob_hi.data());
-    
-    //amrex::RealBox rb = Geom(0).ProbDomain();
-    
-    int coord = Geom(0).Coord();
-    amrex::Array<int, AMREX_SPACEDIM> is_per = Geom(0).isPeriodic();
-    
-    static_geom.define(domain, rb, coord, is_per);
-    LOG(INFO, "Static Grid dx: " + std::to_string(static_geom.CellSize(0)) +
-               " | File Metadata dx: " + std::to_string(metadata.dx));
-
-    // 2. Distribute the newly discovered global domain evenly
-    static_ba.define(domain);
-
-    static_dm.define(static_ba);
-    
-    // 3. Allocate the MultiFab
-    StaticTerrain.define(static_ba, static_dm, ncomp_Terrain, 2); // No ghost cells for static terrain
-    
-    // we make this a dynamic pointer so that we can release after initialization
-    StaticFluid = std::make_unique<amrex::MultiFab>(static_ba, static_dm, ncomp_U, 2); // No ghost cells for static terrain
-
-    StaticTerrain.setVal(-9999.0);
-    StaticFluid->setVal(-9999.0);
-
-
-    // 4. Execute the parallel hyperslab readers
-    for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
-    {
-        const amrex::Box& bx = mfi.validbox();
-        auto const& z_arr = StaticTerrain.array(mfi);
-        auto const& u_arr = StaticFluid->array(mfi);
-        
-        IO->ReadHDF5Hyperslab(z_arr, bx, "bathymetry", 0); 
-        IO->ReadHDF5HyperslabComponents(u_arr, bx, "fluid", 0, ncomp_U);
-    }
-
-    StaticTerrain.FillBoundary(static_geom.periodicity());
-    StaticFluid->FillBoundary(static_geom.periodicity());
-}
-
-void AmrMeshState::InitializeSolver()
-{
-    if (physics_p.model == "Roe") {
-        solver = Roe{};
-    } else {  // fill with else ifs later
-        amrex::Abort("Unknown solver type: " + physics_p.model);
-    }
-}
-
-void AmrMeshState::TerrainMapStaticToDynamic(int lev)
+void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrain)
 {
 
     // Ensure source coarse terrain has valid ghost halos prior to interpolation
@@ -232,9 +14,8 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
         LOG(INFO, "StaticTerrain contains NaNs BEFORE average_down!\n");
     }
 
-    amrex::MultiFab& amr_mf = DynamicTerrain[lev];
     
-    amr_mf.setVal(-9999.0);
+    dynTerrain.setVal(-9999.0);
 
     const amrex::Geometry& amr_geom = geom[lev];
     
@@ -247,7 +28,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
         }
 
         // Use the Geometry-aware 7-argument overload that natively bridges mismatched BoxArrays
-        amrex::masked_average_down(StaticTerrain, amr_mf, static_geom, amr_geom, 0, ncomp_Terrain, ratio, -9999.0);
+        amrex::masked_average_down(StaticTerrain, dynTerrain, static_geom, amr_geom, 0, ncomp_Terrain, ratio, -9999.0);
     } 
     
     // 3. Static is Coarser than AMR: Prolongate (Interpolate from the custom standalone layer)
@@ -270,7 +51,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
             amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> fphysbc(amr_geom,    Terrain_bcs, gpu_bndry_func);
 
             // 15-argument standard compiler-compliant call
-            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
+            amrex::InterpFromCoarseLevel(dynTerrain, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
                                          static_geom, amr_geom,
                                          cphysbc, 0, fphysbc, 0, ratio,
                                          mapper, Terrain_bcs, 0);
@@ -284,21 +65,21 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev)
             amrex::PhysBCFunct<amrex::CpuBndryFuncFab> fphysbc(amr_geom,    Terrain_bcs, bndry_func);
 
             // 15-argument standard compiler-compliant call
-            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
+            amrex::InterpFromCoarseLevel(dynTerrain, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
                                          static_geom, amr_geom,
                                          cphysbc, 0, fphysbc, 0, ratio,
                                          mapper, Terrain_bcs, 0);
         }
     }
 
-    amr_mf.FillBoundary(geom[lev].periodicity());
+    dynTerrain.FillBoundary(geom[lev].periodicity());
 }
 
 void AmrMeshState::FluidMapStaticToDynamic(int lev)
 {
     amrex::MultiFab& amr_mf = U_new[lev];
     
-    amr_mf.setVal(-9999.0);
+    amr_mf.setVal(0.0);
 
     const amrex::Geometry& amr_geom = geom[lev];
     
@@ -360,11 +141,15 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
     amr_mf.FillBoundary(geom[lev].periodicity());
 }
 
+/* ---------------------- AMReX AmrCore Base Functions  ----------------------*/
+
 
 void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time, 
                                            const amrex::BoxArray& ba, 
                                            const amrex::DistributionMapping& dm) 
 {
+
+    
     // 1. Always allocate the MultiFabs for this level
     U_new[lev].define(ba, dm, ncomp_U, ngrow_U);
     U_old[lev].define(ba, dm, ncomp_U, ngrow_U);
@@ -373,14 +158,22 @@ void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time,
     t_new[lev] = time;
     t_old[lev] = time - 1.e200;
 
-    TerrainMapStaticToDynamic(lev);
+    TerrainMapStaticToDynamic(lev, DynamicTerrain[lev]);
     FluidMapStaticToDynamic(lev);
 
     DynamicTerrain[lev].FillBoundary(Geom(lev).periodicity());
     U_new[lev].FillBoundary(Geom(lev).periodicity());
     U_old[lev].FillBoundary(Geom(lev).periodicity());
-}
 
+    if (lev > 0 && amr_p.do_reflux) {
+        flux_reg[lev] = std::make_unique<amrex::FluxRegister>(
+            ba, dm, refRatio(lev - 1), lev, ncomp_U
+        );
+    } else {
+        flux_reg[lev] = nullptr;
+    }
+
+}
 
 void AmrMeshState::PostProcessBaseGrids(amrex::BoxArray& box_array) const
 {
@@ -482,14 +275,14 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
     DynamicTerrain[lev].define(ba, dm, ncomp_Terrain, ngrow_Terrain);
         
     // We use our terrain static representation
-    TerrainMapStaticToDynamic(lev);
+    TerrainMapStaticToDynamic(lev, DynamicTerrain[lev]);
 
     // Track time-stamps for standard evolution sequences
     t_new[lev] = time;
     t_old[lev] = time - 1.e200;
 
     // 3. Dynamic Flux Register Hook
-    if (lev > 0 && do_reflux) {
+    if (lev > 0 && amr_p.do_reflux) {
         flux_reg[lev] = std::make_unique<amrex::FluxRegister>(
             ba, dm, refRatio(lev - 1), lev, ncomp_U
         );
@@ -499,6 +292,7 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
 
     FillCoarsePatch(lev, time, U_new[lev], U_bcs, 0, ncomp_U);
 }
+
 
 void AmrMeshState::Regrid(int lbase, amrex::Real time) {
     LOG(DIAG, "Intercepting regrid pass at lbase = " + std::to_string(lbase));
@@ -514,15 +308,22 @@ void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray&
     MultiFab new_DT(ba, dm, ncomp_Terrain, ngrow_Terrain);
     
     FillPatch(lev, time, new_U, U_bcs, 0, ncomp_U);
+    TerrainMapStaticToDynamic(lev, new_DT);
     
+
     std::swap(new_U, U_new[lev]);
     std::swap(old_U, U_old[lev]);
+    std::swap(new_DT, DynamicTerrain[lev]);
 
     t_new[lev] = time; 
     t_old[lev] = time - 1.e200;
 
-    if (lev > 0 && do_reflux) {
-        flux_reg[lev].reset(new FluxRegister(ba, dm, refRatio(lev-1), lev, ncomp_U));
+    if (lev > 0 && amr_p.do_reflux) {
+        flux_reg[lev] = std::make_unique<amrex::FluxRegister>(
+            ba, dm, refRatio(lev - 1), lev, ncomp_U
+        );
+    } else {
+        flux_reg[lev] = nullptr;
     }
 }
 
@@ -535,74 +336,11 @@ void AmrMeshState::ClearLevel(int lev) {
 void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time, int ngrow)
 {   
     if (lev >= max_level) return;
-
-    if (time == 0.0) {
-        // Use our high-res VRAM StaticTerrain to decide where to refine
-        const amrex::MultiFab& terrain = DynamicTerrain[lev];
-        const amrex::Real slope_threshold = physics_p.z_grad_thresh[lev];
-        const auto dx = geom[lev].CellSizeArray();
-
-        for (amrex::MFIter mfi(tags); mfi.isValid(); ++mfi) {
-            const amrex::Box& bx = mfi.validbox();
-            const auto tag = tags.array(mfi);
-            const auto z = terrain.array(mfi);
-
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
-                // Check slope to tag for refinement
-                
-                amrex::Real z_east  = z(i+1, j, k, 0);
-                amrex::Real z_west  = z(i-1, j, k, 0);
-                amrex::Real z_north = z(i, j+1, k, 0);
-                amrex::Real z_south = z(i, j-1, k, 0);
-                
-                bool edge = (z_east == -9999.0) || (z_west == -9999.0) || (z_north == -9999.0) || (z_south == -9999.0);
-
-                if (edge) { return; }
-                
-                amrex::Real dzdx = (z(i+1,j,k,0) - z(i-1,j,k,0)) / (2.0 * dx[0]);
-                amrex::Real dzdy = (z(i,j+1,k,0) - z(i,j-1,k,0)) / (2.0 * dx[1]);
-                
-                // Tag if slope is high
-                if (std::sqrt(dzdx*dzdx + dzdy*dzdy) > slope_threshold) {
-                    tag(i, j, k) = amrex::TagBox::SET;
-                }
-            });
-        } 
-    }
+    solver.tag_cells(tags, U_new[lev], DynamicTerrain[lev], geom[lev], lev, time, physics_p);
 }
 
-void AmrMeshState::GetTerrainData(int lev, Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime) {
-    data.clear();
-    datatime.clear();
-    data.push_back(&DynamicTerrain[lev]);
-    datatime.push_back(t_new[lev]);
-}
+/* ---------------------- AMReX AmrCore Base Functions  ----------------------*/
 
-
-void AmrMeshState::GetData(int lev, Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime) {
-    data.clear();
-    datatime.clear();
-
-    const Real teps = (t_new[lev] - t_old[lev]) * 1.e-3;
-
-    if (time > t_new[lev] - teps && time < t_new[lev] + teps)
-    {
-        data.push_back(&U_new[lev]);
-        datatime.push_back(t_new[lev]);
-    }
-    else if (time > t_old[lev] - teps && time < t_old[lev] + teps)
-    {
-        data.push_back(&U_old[lev]);
-        datatime.push_back(t_old[lev]);
-    }
-    else
-    {
-        data.push_back(&U_old[lev]);
-        data.push_back(&U_new[lev]);
-        datatime.push_back(t_old[lev]);
-        datatime.push_back(t_new[lev]);
-    }    
-}
 
 void AmrMeshState::FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp) {
     if (lev == 0) {
@@ -683,43 +421,6 @@ void AmrMeshState::FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& 
                                      cphysbc, 0, fphysbc, 0, refRatio(lev-1),
                                      mapper, bcs, 0);
     }
-
-}
-
-
-void AmrMeshState::FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf,  amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp) {
-    BL_ASSERT(lev > 0);
-
-    Vector<MultiFab*> cmf;
-    Vector<Real> ctime;
-    GetTerrainData(lev-1, time, cmf, ctime);
-    Interpolater* mapper = &cell_cons_interp;
-
-    if (cmf.size() != 1) {
-        amrex::Abort("FillCoarsePatch: how did this happen?");
-    }
-
-    if(Gpu::inLaunchRegion())
-    {
-        GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
-        PhysBCFunct<GpuBndryFuncFab<EmptyFill> > cphysbc(geom[lev-1],bcs,gpu_bndry_func);
-        PhysBCFunct<GpuBndryFuncFab<EmptyFill> > fphysbc(geom[lev],bcs,gpu_bndry_func);
-
-        amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
-                                     cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                     mapper, bcs, 0);
-    }
-    else
-    {
-        CpuBndryFuncFab bndry_func(nullptr);  // Without EXT_DIR, we can pass a nullptr.
-        PhysBCFunct<CpuBndryFuncFab> cphysbc(geom[lev-1],bcs,bndry_func);
-        PhysBCFunct<CpuBndryFuncFab> fphysbc(geom[lev],bcs,bndry_func);
-
-        amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
-                                     cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                     mapper, bcs, 0);
-    }
-
 }
 
 void AmrMeshState::AverageDown (amrex::Vector<amrex::MultiFab>& arr) {
@@ -735,5 +436,3 @@ void AmrMeshState::AverageDownTo(int crse_lev, amrex::Vector<amrex::MultiFab>&  
                         geom[crse_lev+1], geom[crse_lev],
                         0, arr[crse_lev].nComp(), refRatio(crse_lev));
 }
-
-
