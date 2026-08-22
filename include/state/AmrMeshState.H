@@ -14,7 +14,6 @@
 #include <AMReX_FillPatchUtil.H>
 #include <AMReX_PlotFileUtil.H>
 #include <AMReX_VisMF.H>
-#include <AMReX_PhysBCFunct.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_Reduce.H>
 
@@ -25,6 +24,7 @@
 
 #include <solvers/SolverVariant.H>
 #include <solvers/SolverContext.H>
+#include <boundaries/BCFill.H>
 
 
 class AmrMeshState : public amrex::AmrCore {
@@ -136,8 +136,10 @@ class AmrMeshState : public amrex::AmrCore {
         mutable std::vector<int> boundary_boxes;
         
         // Boundary conditions
-        amrex::Vector<amrex::BCRec> U_bcs;        // 1-component
-        amrex::Vector<amrex::BCRec> Terrain_bcs;  // 1-component
+        amrex::BCRec phys_bc;                     // Physical BC types (0-5: Interior/Inflow/Outflow/Symmetry/SlipWall/NoSlipWall)
+        amrex::BCRec terrain_bc;                  // Physical BC types (0-5: Interior/Inflow/Outflow/Symmetry/SlipWall/NoSlipWall)
+        amrex::Vector<amrex::BCRec> U_bcs;        // Per-component mathematical BCRecs
+        amrex::Vector<amrex::BCRec> Terrain_bcs;  // Per-component mathematical BCRecs
 
         // --- Static Database State ---
         // Ground Truth Layer: Split across MPI ranks uniformly at ith Level resolution.

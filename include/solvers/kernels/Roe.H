@@ -194,7 +194,7 @@ void roeSolver(
         F[0] -= flux * e0; 
         F[1] -= flux * e1; 
         F[2] -= flux * e2;
-    
+
         // Symmetric Upwind Distribution of Source Terms
         if (lambda_k > 0.0) { 
             S_minus[0] += beta_k * e0;

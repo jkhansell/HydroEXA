@@ -25,7 +25,7 @@ struct Roe : public BaseSolver<Roe> {
         amrex::Array4<amrex::Real const> const& terrain,
         amrex::Array4<amrex::Real> const& D_minus_mf,
         amrex::Array4<amrex::Real> const& D_plus_mf,
-        amrex::Real dt, amrex::Real dx, int dir
+        const amrex::Real dt, const amrex::Real dx, const int dir
     );
 
     amrex::Real compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,

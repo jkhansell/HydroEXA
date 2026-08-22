@@ -15,7 +15,7 @@ struct RuntimeParameters
     int iteration{0};             // Iteration counter
 };
 
-struct IOParameters 
+struct IOParameters
 {
     amrex::Real io_freq{1.0};                 // Frequency of I/O operations (in physical time)
     amrex::Real chk_freq{-1.0};               // Checkpoint frequency (in physical time)
@@ -28,7 +28,7 @@ struct IOParameters
     std::string restart_chkfile{"restart"};   // Checkpoint file to restart from (empty means no restart)
 };
 
-struct AMRParameters 
+struct AMRParameters
 {
     int regrid_int{2};            // Regridding frequency (in iterations)
     int do_reflux{1};             // Perform refluxing for flux correction at coarse-fine interfaces
@@ -37,13 +37,24 @@ struct AMRParameters
     int max_amr_level{0};         // Maximum level for the AMR grid (if -1, it is set to the number of levels)
 };
 
-struct PhysicsParameters 
+// Physical BC type indices (mapped to mathematical BCType at runtime)
+// 0 = Interior (periodic/interior)    3 = Symmetry
+// 1 = Inflow                         4 = SlipWall
+// 2 = Outflow                        5 = NoSlipWall
+struct BCParams
+{
+    int lo_bc[AMREX_SPACEDIM] = {5, 5};   // default: NoSlipWall
+    int hi_bc[AMREX_SPACEDIM] = {5, 5};
+};
+
+struct PhysicsParameters
 {
     amrex::Real cfl{0.5};                         // CFL number for time step calculation
     std::string model{"Roe"};                     // Model selection: 0 for SWE, 1 for SWE-Exner
     amrex::Vector<amrex::Real> h_grad_thresh;     // Thresholds for tagging based on height gradients
     amrex::Vector<amrex::Real> umag_grad_thresh;  // Threshold for tagging based on velocity magnitude gradients
-    amrex::Vector<amrex::Real> z_grad_thresh;     // Threshold for tagging based on velocity magnitude gradients
+    amrex::Vector<amrex::Real> z_grad_thresh;     // Thresholds for tagging based on velocity magnitude gradients
+    BCParams bc_params;                           // Physical boundary condition types
 };
 
 
