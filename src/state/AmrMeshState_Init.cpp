@@ -48,42 +48,28 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
     U_bcs.resize(ncomp_U);
     Terrain_bcs.resize(ncomp_Terrain);
 
-    for (int comp = 0; comp < ncomp_U; ++comp) 
+    // 3. Build physical BCRec from user-specified physical BC type integers
+    for (int i = 0; i < AMREX_SPACEDIM; ++i)
     {
-        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) 
-        {
-            if (period.isPeriodic(idim)) 
-            {
-                U_bcs[comp].setLo(idim, amrex::BCType::int_dir);
-                U_bcs[comp].setHi(idim, amrex::BCType::int_dir);
-            } 
-            else 
-            {
-                U_bcs[comp].setLo(idim, amrex::BCType::ext_dir);
-                U_bcs[comp].setHi(idim, amrex::BCType::ext_dir);
-            }
-        }
-    }
-    
-    // 4. Populate terrain boundary conditions records (foextrap or int_dir if periodic)
-    for (int comp = 0; comp < ncomp_Terrain; ++comp) 
-    {
-        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) 
-        {
-            if (period.isPeriodic(idim)) 
-            {
-                Terrain_bcs[comp].setLo(idim, amrex::BCType::int_dir);
-                Terrain_bcs[comp].setHi(idim, amrex::BCType::int_dir);
-            }
-            else
-            {
-                Terrain_bcs[comp].setLo(idim, amrex::BCType::foextrap);
-                Terrain_bcs[comp].setHi(idim, amrex::BCType::foextrap);
-            }
-        }
-    }
-}
+        phys_bc.setLo(i, physics_p.bc_params.lo_bc[i]);
+        phys_bc.setHi(i, physics_p.bc_params.hi_bc[i]);
 
+        terrain_bc.setLo(i, 2); // Terrain is always extrapolated
+        terrain_bc.setHi(i, 2); // Terrain is always extrapolated
+    }
+
+    // 4. Map physical BC types to mathematical BCRecs per component
+    // Component 0 (h): scalar BCs
+    set_scalar_bc(U_bcs[0], phys_bc);
+    // Component 1 (hu): x-velocity (normal in x-dir, tangential in y-dir)
+    set_x_vel_bc(U_bcs[1], phys_bc);
+    // Component 2 (hv): y-velocity (tangential in x-dir, normal in y-dir)
+    set_y_vel_bc(U_bcs[2], phys_bc);
+
+    // 5. Terrain BCs (scalar for both bathymetry and roughness)
+    set_scalar_bc(Terrain_bcs[0], terrain_bc);
+    set_scalar_bc(Terrain_bcs[1], terrain_bc);
+}
 
 void AmrMeshState::ResizeLevels(int nlevs) {
     U_new.resize(nlevs);

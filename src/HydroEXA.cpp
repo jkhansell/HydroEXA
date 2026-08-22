@@ -56,8 +56,28 @@ void HydroEXA::ReadParameters() {
         if (n > 0) {
             pp.getarr("z_grad_thresh", physics_params.z_grad_thresh, 0, n);
         }
+
+        // Boundary conditions: physical BC type integers (0-5)
+        n = pp.countval("lo_bc");
+        if (n > 0) {
+            amrex::Vector<int> lo_bc_tmp(n);
+            pp.getarr("lo_bc", lo_bc_tmp, 0, n);
+            for (int i = 0; i < AMREX_SPACEDIM && i < n; ++i) {
+                physics_params.bc_params.lo_bc[i] = lo_bc_tmp[i];
+            }
+        }
+        n = pp.countval("hi_bc");
+        if (n > 0) {
+            amrex::Vector<int> hi_bc_tmp(n);
+            pp.getarr("hi_bc", hi_bc_tmp, 0, n);
+            for (int i = 0; i < AMREX_SPACEDIM && i < n; ++i) {
+                physics_params.bc_params.hi_bc[i] = hi_bc_tmp[i];
+            }
+        }
     }
 }
+
+
 void HydroEXA::Initialize() {
     BL_PROFILE("HydroEXA::Initialize");
 

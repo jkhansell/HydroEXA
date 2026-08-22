@@ -1,7 +1,8 @@
 #include <state/AmrMeshState.H>
 #include <utils/MaskedAverageDown.H>
-#include <boundaries/EmptyFill.H>
+#include <boundaries/BCFill.H>
 #include <utils/Logging.H>
+#include <AMReX_PhysBCFunct.H>
 
 
 void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrain)
@@ -41,34 +42,14 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrai
 
         amrex::Real dummy_time = 0.0;
 
-        amrex::Interpolater* mapper = &amrex::cell_cons_interp;
-
-        if (amrex::Gpu::inLaunchRegion())
         {
-            // Set up hardware-agnostic boundary functions using your EmptyFill approach
-            amrex::GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> cphysbc(static_geom, Terrain_bcs, gpu_bndry_func);
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> fphysbc(amr_geom,    Terrain_bcs, gpu_bndry_func);
-
-            // 15-argument standard compiler-compliant call
+            amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+            using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+            BndryPhysBC physbc(static_geom, Terrain_bcs, bndry_func);
             amrex::InterpFromCoarseLevel(dynTerrain, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
                                          static_geom, amr_geom,
-                                         cphysbc, 0, fphysbc, 0, ratio,
-                                         mapper, Terrain_bcs, 0);
-        }
-        else
-        {
-
-            // Host CPU equivalent mapping path
-            amrex::CpuBndryFuncFab bndry_func(nullptr);
-            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> cphysbc(static_geom, Terrain_bcs, bndry_func);
-            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> fphysbc(amr_geom,    Terrain_bcs, bndry_func);
-
-            // 15-argument standard compiler-compliant call
-            amrex::InterpFromCoarseLevel(dynTerrain, dummy_time, StaticTerrain, 0, 0, ncomp_Terrain,
-                                         static_geom, amr_geom,
-                                         cphysbc, 0, fphysbc, 0, ratio,
-                                         mapper, Terrain_bcs, 0);
+                                         physbc, 0, physbc, 0, ratio,
+                                         &amrex::cell_cons_interp, Terrain_bcs, 0);
         }
     }
 
@@ -107,34 +88,14 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
 
         amrex::Real dummy_time = 0.0;
 
-        amrex::Interpolater* mapper = &amrex::cell_cons_interp;
-
-        if (amrex::Gpu::inLaunchRegion())
         {
-            // Set up hardware-agnostic boundary functions using your EmptyFill approach
-            amrex::GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> cphysbc(static_geom, U_bcs, gpu_bndry_func);
-            amrex::PhysBCFunct<amrex::GpuBndryFuncFab<EmptyFill>> fphysbc(amr_geom,    U_bcs, gpu_bndry_func);
-
-            // 15-argument standard compiler-compliant call
+            amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+            using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+            BndryPhysBC physbc(static_geom, U_bcs, bndry_func);
             amrex::InterpFromCoarseLevel(amr_mf, dummy_time, *StaticFluid, 0, 0, ncomp_U,
                                          static_geom, amr_geom,
-                                         cphysbc, 0, fphysbc, 0, ratio,
-                                         mapper, U_bcs, 0);
-        }
-        else
-        {
-
-            // Host CPU equivalent mapping path
-            amrex::CpuBndryFuncFab bndry_func(nullptr);
-            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> cphysbc(static_geom, U_bcs, bndry_func);
-            amrex::PhysBCFunct<amrex::CpuBndryFuncFab> fphysbc(amr_geom,    U_bcs, bndry_func);
-
-            // 15-argument standard compiler-compliant call
-            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, *StaticFluid, 0, 0, ncomp_U,
-                                         static_geom, amr_geom,
-                                         cphysbc, 0, fphysbc, 0, ratio,
-                                         mapper, U_bcs, 0);
+                                         physbc, 0, physbc, 0, ratio,
+                                         &amrex::cell_cons_interp, U_bcs, 0);
         }
     }
 
@@ -303,9 +264,9 @@ void AmrMeshState::Regrid(int lbase, amrex::Real time) {
 
 void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm) {
     
-    MultiFab new_U(ba, dm, ncomp_U, ngrow_U);
-    MultiFab old_U(ba, dm, ncomp_U, ngrow_U);
-    MultiFab new_DT(ba, dm, ncomp_Terrain, ngrow_Terrain);
+    amrex::MultiFab new_U(ba, dm, ncomp_U, ngrow_U);
+    amrex::MultiFab old_U(ba, dm, ncomp_U, ngrow_U);
+    amrex::MultiFab new_DT(ba, dm, ncomp_Terrain, ngrow_Terrain);
     
     FillPatch(lev, time, new_U, U_bcs, 0, ncomp_U);
     TerrainMapStaticToDynamic(lev, new_DT);
@@ -344,83 +305,50 @@ void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
 
 void AmrMeshState::FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp) {
     if (lev == 0) {
-        Vector<MultiFab*> smf;
-        Vector<Real> stime;
+        amrex::Vector<amrex::MultiFab*> smf;
+        amrex::Vector<amrex::Real> stime;
         GetData(0, time, smf, stime);
 
-        if(Gpu::inLaunchRegion()) {
-            GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
-            PhysBCFunct<GpuBndryFuncFab<EmptyFill> > physbc(geom[lev],bcs,gpu_bndry_func);
-            amrex::FillPatchSingleLevel(mf, time, smf, stime, 0, icomp, ncomp,
-                                        geom[lev], physbc, 0);
-        } else {
-            CpuBndryFuncFab bndry_func(nullptr);  // Without EXT_DIR, we can pass a nullptr.
-            PhysBCFunct<CpuBndryFuncFab> physbc(geom[lev],bcs,bndry_func);
-            amrex::FillPatchSingleLevel(mf, time, smf, stime, 0, icomp, ncomp,
-                                        geom[lev], physbc, 0);
-        }
+        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+        BndryPhysBC physbc(geom[lev], U_bcs, bndry_func);
+        amrex::FillPatchSingleLevel(mf, time, smf, stime, 0, icomp, ncomp,
+                                    geom[lev], physbc, 0);
     } else {
-        Vector<MultiFab*> cmf, fmf;
-        Vector<Real> ctime, ftime;
+        amrex::Vector<amrex::MultiFab*> cmf, fmf;
+        amrex::Vector<amrex::Real> ctime, ftime;
         GetData(lev-1, time, cmf, ctime);
         GetData(lev  , time, fmf, ftime);
 
-        Interpolater* mapper = &cell_cons_interp;
-
-        if(Gpu::inLaunchRegion()) {
-            GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
-            PhysBCFunct<GpuBndryFuncFab<EmptyFill> > cphysbc(geom[lev-1],bcs,gpu_bndry_func);
-            PhysBCFunct<GpuBndryFuncFab<EmptyFill> > fphysbc(geom[lev],bcs,gpu_bndry_func);
-
-            amrex::FillPatchTwoLevels(mf, time, cmf, ctime, fmf, ftime,
-                                      0, icomp, ncomp, geom[lev-1], geom[lev],
-                                      cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                      mapper, bcs, 0);
-        } else {
-            CpuBndryFuncFab bndry_func(nullptr);  // Without EXT_DIR, we can pass a nullptr.
-            PhysBCFunct<CpuBndryFuncFab> cphysbc(geom[lev-1],bcs,bndry_func);
-            PhysBCFunct<CpuBndryFuncFab> fphysbc(geom[lev],bcs,bndry_func);
-
-            amrex::FillPatchTwoLevels(mf, time, cmf, ctime, fmf, ftime,
-                                      0, icomp, ncomp, geom[lev-1], geom[lev],
-                                      cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                      mapper, bcs, 0);
-        }
+        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+        BndryPhysBC cphysbc(geom[lev-1], U_bcs, bndry_func);
+        BndryPhysBC fphysbc(geom[lev], U_bcs, bndry_func);
+        amrex::FillPatchTwoLevels(mf, time, cmf, ctime, fmf, ftime,
+                                  0, icomp, ncomp, geom[lev-1], geom[lev],
+                                  cphysbc, 0, fphysbc, 0, refRatio(lev-1),
+                                  &amrex::cell_cons_interp, U_bcs, 0);
     }
 }
 
 void AmrMeshState::FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& mf,  amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp) {
     BL_ASSERT(lev > 0);
 
-    Vector<MultiFab*> cmf;
-    Vector<Real> ctime;
+    amrex::Vector<amrex::MultiFab*> cmf;
+    amrex::Vector<amrex::Real> ctime;
     GetData(lev-1, time, cmf, ctime);
-    Interpolater* mapper = &cell_cons_interp;
 
     if (cmf.size() != 1) {
         amrex::Abort("FillCoarsePatch: how did this happen?");
     }
 
-    if(Gpu::inLaunchRegion())
-    {
-        GpuBndryFuncFab<EmptyFill> gpu_bndry_func(EmptyFill{});
-        PhysBCFunct<GpuBndryFuncFab<EmptyFill> > cphysbc(geom[lev-1],bcs,gpu_bndry_func);
-        PhysBCFunct<GpuBndryFuncFab<EmptyFill> > fphysbc(geom[lev],bcs,gpu_bndry_func);
-
-        amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
-                                     cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                     mapper, bcs, 0);
-    }
-    else
-    {
-        CpuBndryFuncFab bndry_func(nullptr);  // Without EXT_DIR, we can pass a nullptr.
-        PhysBCFunct<CpuBndryFuncFab> cphysbc(geom[lev-1],bcs,bndry_func);
-        PhysBCFunct<CpuBndryFuncFab> fphysbc(geom[lev],bcs,bndry_func);
-
-        amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
-                                     cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                     mapper, bcs, 0);
-    }
+    amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+    using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+    BndryPhysBC cphysbc(geom[lev-1], bcs, bndry_func);
+    BndryPhysBC fphysbc(geom[lev], bcs, bndry_func);
+    amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
+                                 cphysbc, 0, fphysbc, 0, refRatio(lev-1),
+                                 &amrex::cell_cons_interp, bcs, 0);
 }
 
 void AmrMeshState::AverageDown (amrex::Vector<amrex::MultiFab>& arr) {

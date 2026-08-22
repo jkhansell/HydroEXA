@@ -1,5 +1,6 @@
 #include <solvers/Roe.H>
 #include <solvers/kernels/Roe.H>
+#include <boundaries/BCFill.H>
 
 void
 Roe::compute_amrex_effective_fluxes(
@@ -32,7 +33,8 @@ Roe::compute_amrex_effective_fluxes(
         amrex::Real zj  = terrain(ri, rj, k, 0);
         amrex::Real nj  = terrain(ri, rj, k, 1);
 
-        amrex::Real D_minus[3], D_plus[3];
+        amrex::Real D_minus[3] = {}; 
+        amrex::Real D_plus[3] = {};
         roeSolver(hi, hui, hvi, zi, ni,
                   hj, huj, hvj, zj, nj,
                   D_minus, D_plus, dt, dx, nx, ny);
@@ -50,19 +52,7 @@ Roe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
                      const amrex::Vector<amrex::Geometry>& geom,
                      int lev, amrex::Real cfl) {
     BL_PROFILE("Roe::compute_dt_Impl");
-
-    amrex::Print() << "ComputeDT: "
-    << "Level " << lev
-    << " h=["
-    << U[lev].min(0) << ", "
-    << U[lev].max(0) << "] "
-    << "hu=["
-    << U[lev].min(1) << ", "
-    << U[lev].max(1) << "] "
-    << "hv=["
-    << U[lev].min(2) << ", "
-    << U[lev].max(2) << "]\n";
-
+    
     // 1. Use the incoming function parameters instead of hidden mesh_state dependencies
     const auto dx = geom[lev].CellSizeArray();
     const amrex::MultiFab& S = U[lev];
@@ -209,26 +199,23 @@ void Roe::tag_cells_Impl(amrex::TagBoxArray& tags,
 
 void
 Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real time) {
-    
+
     std::swap(ctx.U_new[lev], ctx.U_old[lev]);
 
     amrex::MultiFab& U_n = ctx.U_new[lev];
     amrex::MultiFab& U_o = ctx.U_old[lev];
-    amrex::MultiFab& Terrain  = ctx.Terrain[lev];
+    amrex::MultiFab& Terrain = ctx.Terrain[lev];
 
     AMREX_ASSERT_WITH_MESSAGE(U_n.nComp() >= 3,
         "Roe solver requires at least 3 state components (H, HU, HV) but U_n.nComp() = "
         + std::to_string(U_n.nComp()));
-
 
     const auto& amr_geom = ctx.geom[lev];
     const amrex::Real dx = amr_geom.CellSize(0);
     const amrex::Real dy = amr_geom.CellSize(1);
 
     // ------------------------------------------------------------------------
-    // 1. FLUX REGISTER POINTERS (AmrCore-style)
-    //    flux_reg[lev]     = register lev receives fluxes FROM (lev-1 -> lev)
-    //    flux_reg[lev + 1] = register lev contributes fluxes TO   (lev -> lev+1)
+    // 1. FLUX REGISTER POINTERS
     // ------------------------------------------------------------------------
     amrex::FluxRegister* fr_as_crse = nullptr;
     if (ctx.do_reflux && lev < ctx.finest_level) {
@@ -240,55 +227,50 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         fr_as_fine = ctx.FluxRegisters[lev].get();
     }
 
-    // ------------------------------------------------------------------------
-    // 2. FILL PATCH (ghost cells)
-    // ------------------------------------------------------------------------
-    // amrex::MultiFab U_border(ctx.grids[lev], ctx.dmap[lev], U_n.nComp(), U_n.nGrow());
-    // ctx.FillPatch(lev, time, U_border, ctx.UBCs, 0, U_n.nComp());
-
-    // amrex::MultiFab Terrain_border(ctx.grids[lev], ctx.dmap[lev], Terrain.nComp(), Terrain.nGrow());
-    // ctx.FillPatch(lev, time, Terrain_border, ctx.TerrainBCs, 0, Terrain.nComp());
-
-    // ------------------------------------------------------------------------
-    // 3. ALLOCATE DUAL FLUXES (nodal in flux direction)
-    // ------------------------------------------------------------------------
-    amrex::MultiFab fx_minus, fx_plus;
-    amrex::MultiFab fy_minus, fy_plus;
-
-    {
-        amrex::BoxArray ba_x = ctx.grids[lev];
-        ba_x.surroundingNodes(0);
-        fx_minus.define(ba_x, ctx.dmap[lev], U_n.nComp(), 1);
-        fx_plus.define(ba_x, ctx.dmap[lev], U_n.nComp(), 1);
-
-        amrex::BoxArray ba_y = ctx.grids[lev];
-        ba_y.surroundingNodes(1);
-        fy_minus.define(ba_y, ctx.dmap[lev], U_n.nComp(), 1);
-        fy_plus.define(ba_y, ctx.dmap[lev], U_n.nComp(), 1);
-
-        fx_minus.setVal(0.0);
-        fy_minus.setVal(0.0);
-        fx_plus.setVal(0.0);
-        fy_plus.setVal(0.0);
-
-        // Fill boundary for fluxes (needed for coarse-fine interface detection)
-        fx_minus.FillBoundary(amr_geom.periodicity());
-        fx_plus.FillBoundary(amr_geom.periodicity());
-        fy_minus.FillBoundary(amr_geom.periodicity());
-        fy_plus.FillBoundary(amr_geom.periodicity());
+    if (fr_as_crse) {
+        fr_as_crse->setVal(0.0);
     }
 
     // ------------------------------------------------------------------------
-    // 4. COMPUTE DIRECTIONAL ADVANCED RIEMANN FLUXES
+    // 2. ALLOCATE DUAL EFFECTIVE FLUXES (FL and FR)
     // ------------------------------------------------------------------------
-    // Capture for device lambda capture (avoid capturing `this`)
+    amrex::MultiFab D_minus_mf[AMREX_SPACEDIM];
+    amrex::MultiFab D_plus_mf[AMREX_SPACEDIM];
+
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
+    {
+        amrex::BoxArray ba = ctx.grids[lev];
+        ba.surroundingNodes(dir);
+        D_minus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+        D_plus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+
+        D_minus_mf[dir].setVal(0.0);
+        D_plus_mf[dir].setVal(0.0);
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. COMPUTE DIRECTIONAL DUAL EFFECTIVE FLUXES
+    // ------------------------------------------------------------------------
     const amrex::Real dx_local = dx;
     const amrex::Real dy_local = dy;
     const amrex::Real dt_local = dt;
 
-
     U_o.FillBoundary(amr_geom.periodicity());
     Terrain.FillBoundary(amr_geom.periodicity());
+
+    // Apply physical boundary conditions to ghost cells
+    {
+        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+        BndryPhysBC physbc(amr_geom, ctx.UBCs, bndry_func);
+        physbc.FillBoundary(U_o, 0, U_o.nComp(), amrex::IntVect(1), time, 0);
+    }
+    {
+        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+        BndryPhysBC physbc(amr_geom, ctx.TerrainBCs, bndry_func);
+        physbc.FillBoundary(Terrain, 0, Terrain.nComp(), amrex::IntVect(1), time, 0);
+    }
 
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())
@@ -302,28 +284,29 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             auto const& statein = U_o.array(mfi);
             auto const& z_arr = Terrain.array(mfi);
 
+            // Output FL and FR directly from roeSolver
             compute_amrex_effective_fluxes(
                 bx_x, statein, z_arr,
-                fx_minus.array(mfi), fx_plus.array(mfi),
+                D_minus_mf[0].array(mfi), D_plus_mf[0].array(mfi),
                 dt_local, dx_local, 0
             );
 
             compute_amrex_effective_fluxes(
                 bx_y, statein, z_arr,
-                fy_minus.array(mfi), fy_plus.array(mfi),
+                D_minus_mf[1].array(mfi), D_plus_mf[1].array(mfi),
                 dt_local, dy_local, 1
             );
         }
     }
 
-    // Fill boundary for fluxes (needed for coarse-fine interface detection)
-    fx_minus.FillBoundary(amr_geom.periodicity());
-    fx_plus.FillBoundary(amr_geom.periodicity());
-    fy_minus.FillBoundary(amr_geom.periodicity());
-    fy_plus.FillBoundary(amr_geom.periodicity());
+    // we might not need this because we don't have ghosts
+    // for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) { 
+    //     flux_L[dir].FillBoundary(geom.periodicity());
+    //     flux_R[dir].FillBoundary(geom.periodicity());
+    // }
 
     // ------------------------------------------------------------------------
-    // 5. LOCAL CONSERVATIVE CELL UPDATE
+    // 4. LOCAL CONSERVATIVE CELL UPDATE (Exact Fluctuation Differencing)
     // ------------------------------------------------------------------------
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())
@@ -332,21 +315,25 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             const int ncomp = U_o.nComp();
+            const amrex::Box& bx = mfi.tilebox();
 
-            const amrex::Box& bx = mfi.validbox();
-            auto const& fx_m = fx_minus.array(mfi);
-            auto const& fx_p = fx_plus.array(mfi);
-            auto const& fy_m = fy_minus.array(mfi);
-            auto const& fy_p = fy_plus.array(mfi);
-            auto const& u_o  = U_o.array(mfi);
-            auto const& u_n  = U_n.array(mfi);
+            auto const& Dminus_x = D_minus_mf[0].array(mfi);
+            auto const& Dplus_x = D_plus_mf[0].array(mfi);
 
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
+            auto const& Dminus_y = D_minus_mf[1].array(mfi);
+            auto const& Dplus_y = D_plus_mf[1].array(mfi);
+
+            auto const& u_o = U_o.array(mfi);
+            auto const& u_n = U_n.array(mfi);
+
+            amrex::ParallelFor(bx,
+            [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                for (int n = 0; n < ncomp; ++n) {
-                    u_n(i, j, k, n) = u_o(i, j, k, n)
-                        - (dt_local / dx) * (fx_m(i + 1, j, k, n) - fx_p(i, j, k, n))
-                        - (dt_local / dy) * (fy_m(i, j + 1, k, n) - fy_p(i, j, k, n));
+                for (int n = 0; n < ncomp; ++n)
+                {
+                    u_n(i,j,k,n) = u_o(i,j,k,n)
+                                 - (dt_local/dx_local) * (Dminus_x(i+1,j,k,n) - Dplus_x(i,j,k,n))
+                                 - (dt_local/dy_local) * (Dminus_y(i,j+1,k,n) - Dplus_y(i,j,k,n));
                 }
             });
         }
@@ -354,112 +341,129 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
 
     amrex::Print()
         << "Level " << lev
-        << " h=["
-        << U_n.min(0) << ", "
-        << U_n.max(0) << "] "
-        << "hu=["
-        << U_n.min(1) << ", "
-        << U_n.max(1) << "] "
-        << "hv=["
-        << U_n.min(2) << ", "
-        << U_n.max(2) << "]\n";
+        << " h=["  << U_n.min(0) << ", " << U_n.max(0) << "] "
+        << "hu=[" << U_n.min(1) << ", " << U_n.max(1) << "] "
+        << "hv=[" << U_n.min(2) << ", " << U_n.max(2) << "]\n";
 
     // ------------------------------------------------------------------------
-    // 6. MAP FLUXES INTO AMREX FLUX REGISTERS (coarse-fine interfaces)
+    // 5. PREPARE AND SYNCHRONIZE WITH FLUX REGISTERS
     // ------------------------------------------------------------------------
-    if (ctx.do_reflux)
+    if (fr_as_crse || fr_as_fine)
     {
-        amrex::MultiFab fluxes_crse[AMREX_SPACEDIM];
-        amrex::MultiFab fluxes_fine[AMREX_SPACEDIM];
+        amrex::MultiFab flux_fine[AMREX_SPACEDIM];
+        amrex::MultiFab flux_crse[AMREX_SPACEDIM];
 
-        if (fr_as_crse)
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
         {
-            amrex::BoxArray ba_x = ctx.grids[lev];
-            ba_x.surroundingNodes(0);
-            fluxes_crse[0].define(ba_x, ctx.dmap[lev], U_n.nComp(), 0);
-            fluxes_crse[0].setVal(0.0);
-            fluxes_crse[0].FillBoundary(amr_geom.periodicity());
+            amrex::BoxArray ba = ctx.grids[lev];
+            ba.surroundingNodes(dir);
 
-
-            amrex::BoxArray ba_y = ctx.grids[lev];
-            ba_y.surroundingNodes(1);
-            fluxes_crse[1].define(ba_y, ctx.dmap[lev], U_n.nComp(), 0);
-            fluxes_crse[1].setVal(0.0);
-            fluxes_crse[1].FillBoundary(amr_geom.periodicity());
-        
-        }
-
-        if (fr_as_fine)
-        {
-            amrex::BoxArray ba_x = ctx.grids[lev];
-            ba_x.surroundingNodes(0);
-            fluxes_fine[0].define(ba_x, ctx.dmap[lev], U_n.nComp(), 0);
-            fluxes_fine[0].setVal(0.0);
-            fluxes_fine[0].FillBoundary(amr_geom.periodicity());
-
-            amrex::BoxArray ba_y = ctx.grids[lev];
-            ba_y.surroundingNodes(1);
-            fluxes_fine[1].define(ba_y, ctx.dmap[lev], U_n.nComp(), 0);
-            fluxes_fine[1].setVal(0.0);
-            fluxes_fine[1].FillBoundary(amr_geom.periodicity());
-
-        }
-
-        // --- 6a. Coarse-fine fluxes: this level contributes to coarser level ---
-        if (fr_as_crse)
-        {
-            // fine_mask: 1 = valid internal cell on this level, 0 = covered by coarse
-            amrex::iMultiFab fine_mask = ctx.makeFineMask(U_n, ctx.grids[lev + 1], ctx.RefRatio(lev), 0, 1);
-
-#ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
+            if (fr_as_fine)
             {
-                for (amrex::MFIter mfi(U_n, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+                flux_fine[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+                flux_fine[dir].setVal(0.0);
+            }
+
+            if (fr_as_crse)
+            {
+                flux_crse[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+                flux_crse[dir].setVal(0.0);
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // Coarse coverage mask
+        //
+        // 0 = Coarse cell
+        // 1 = Covered by finer level
+        // --------------------------------------------------------------------
+        std::unique_ptr<amrex::iMultiFab> coarse_mask;
+
+        if (fr_as_crse)
+        {
+            coarse_mask = std::make_unique<amrex::iMultiFab>(makeFineMask(U_n,ctx.grids[lev+1],ctx.RefRatio(lev),0,1));
+        }
+
+    #ifdef AMREX_USE_OMP
+    #pragma omp parallel if (Gpu::notInLaunchRegion())
+    #endif
+        {
+            for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+            {
+                const int ncomp = U_o.nComp();
+                const amrex::Box& valid_bx = mfi.validbox();
+
+                auto const& mask = fr_as_crse ? coarse_mask->const_array(mfi) : amrex::Array4<int const>();
+
+                for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
                 {
-                    const int ncomp = U_n.nComp();
+                    amrex::Box nbx = mfi.nodaltilebox(dir);
 
-                    amrex::Box bx_x = mfi.nodaltilebox(0);
-                    amrex::Box bx_y = mfi.nodaltilebox(1);
+                    auto const& Dm = D_minus_mf[dir].array(mfi);   // D-
+                    auto const& Dp = D_plus_mf[dir].array(mfi);   // D+
 
-                    auto const& mask = fine_mask.array(mfi);
-                    auto const& fx_m = fx_minus.array(mfi);
-                    auto const& fx_p = fx_plus.array(mfi);
-                    auto const& reg_x = fluxes_crse[0].array(mfi);
-                    auto const& fy_m = fy_minus.array(mfi);
-                    auto const& fy_p = fy_plus.array(mfi);
-                    auto const& reg_y = fluxes_crse[1].array(mfi);
+                    auto const& ff = fr_as_fine ? flux_fine[dir].array(mfi) : amrex::Array4<amrex::Real>();
+                    auto const& fc = fr_as_crse ? flux_crse[dir].array(mfi) : amrex::Array4<amrex::Real>();
 
-                    amrex::ParallelFor(bx_x,
-                    [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
+                    const int i_low  = valid_bx.smallEnd(dir);
+                    const int i_high = valid_bx.bigEnd(dir) + 1;
+
+                    amrex::ParallelFor(nbx,
+                    [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
                     {
-                        int left_is_fine  = mask(i - 1, j, k);
-                        int right_is_fine = mask(i, j, k);
+                        int face_idx = (dir == 0) ? i : (dir == 1) ? j : k;
 
-                        for (int n = 0; n < ncomp; ++n) {
-                            if (left_is_fine == 1 && right_is_fine == 0) {
-                                reg_x(i, j, k, n) = fx_p(i, j, k, n);
-                            } else if (left_is_fine == 0 && right_is_fine == 1) {
-                                reg_x(i, j, k, n) = fx_m(i, j, k, n);
-                            } else {
-                                reg_x(i, j, k, n) = 0.0;
+                        int left_is_fine  = 0;
+                        int right_is_fine = 0;
+
+                        if (fr_as_crse)
+                        {
+                            if (dir == 0)
+                            {
+                                left_is_fine  = mask(i-1,j,k);
+                                right_is_fine = mask(i  ,j,k);
+                            }
+                            else
+                            {
+                                left_is_fine  = mask(i,j-1,k);
+                                right_is_fine = mask(i,j  ,k);
                             }
                         }
-                    });
 
-                    amrex::ParallelFor(bx_y,
-                    [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
-                    {
-                        int bottom_is_fine = mask(i, j - 1, k);
-                        int top_is_fine    = mask(i, j, k);
+                        for (int n = 0; n < ncomp; ++n)
+                        {
+                            //--------------------------------------------------
+                            // COARSE REGISTER
+                            //--------------------------------------------------
+                            if (fr_as_crse)
+                            {
+                                if (left_is_fine == 0 && right_is_fine == 1)
+                                {
+                                    // Coarse cell is LEFT
+                                    fc(i,j,k,n) = Dm(i,j,k,n);
+                                }
+                                else if (left_is_fine == 1 && right_is_fine == 0)
+                                {
+                                    // Coarse cell is RIGHT
+                                    fc(i,j,k,n) = Dp(i,j,k,n);
+                                }
+                            }
 
-                        for (int n = 0; n < ncomp; ++n) {
-                            if (bottom_is_fine == 1 && top_is_fine == 0) {
-                                reg_y(i, j, k, n) = fy_p(i, j, k, n);
-                            } else if (bottom_is_fine == 0 && top_is_fine == 1) {
-                                reg_y(i, j, k, n) = fy_m(i, j, k, n);
-                            } else {
-                                reg_y(i, j, k, n) = 0.0;
+                            //--------------------------------------------------
+                            // FINE REGISTER
+                            //--------------------------------------------------
+                            if (fr_as_fine)
+                            {
+                                if (face_idx == i_low)
+                                {
+                                    // Fine cell is RIGHT
+                                    ff(i,j,k,n) = Dp(i,j,k,n);
+                                }
+                                else if (face_idx == i_high)
+                                {
+                                    // Fine cell is LEFT
+                                    ff(i,j,k,n) = Dm(i,j,k,n);
+                                }
                             }
                         }
                     });
@@ -467,77 +471,14 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             }
         }
 
-        // --- 6b. Coarse-fine fluxes: this level contributes to finer level ---
-        if (fr_as_fine)
-        {
-
-#ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
-            {
-                for (amrex::MFIter mfi(U_n, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
-                {
-                    const int ncomp = U_n.nComp();
-
-                    amrex::Box bx_x = mfi.nodaltilebox(0);
-                    amrex::Box bx_y = mfi.nodaltilebox(1);
-                    amrex::Box bx_grid = mfi.validbox();
-
-                    auto const& fx_m = fx_minus.array(mfi);
-                    auto const& fx_p = fx_plus.array(mfi);
-                    auto const& reg_x = fluxes_fine[0].array(mfi);
-
-                    auto const& fy_m = fy_minus.array(mfi);
-                    auto const& fy_p = fy_plus.array(mfi);
-                    auto const& reg_y = fluxes_fine[1].array(mfi);
-
-                    amrex::ParallelFor(bx_x,
-                    [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-                    {
-                        int is_low_boundary = (i == bx_grid.smallEnd(0));
-                        int is_high_boundary = (i == bx_grid.bigEnd(0) + 1);
-
-                        for (int n = 0; n < ncomp; ++n) {
-                            if (is_low_boundary) {
-                                reg_x(i, j, k, n) = fx_p(i, j, k, n); // Western boundary: fine cell is right (i), uses fx_p
-                            } else if (is_high_boundary) {
-                                reg_x(i, j, k, n) = fx_m(i, j, k, n); // Eastern boundary: fine cell is left (i-1), uses fx_m
-                            } else {
-                                reg_x(i, j, k, n) = 0.0;
-                            }
-                        }
-                    });
-
-                    amrex::ParallelFor(bx_y,
-                    [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-                    {
-                        int is_low_boundary = (j == bx_grid.smallEnd(1));
-                        int is_high_boundary = (j == bx_grid.bigEnd(1) + 1);
-
-                        for (int n = 0; n < ncomp; ++n) {
-                            if (is_low_boundary) {
-                                reg_y(i, j, k, n) = fy_p(i, j, k, n); // Southern boundary: fine cell is top (j), uses fy_p
-                            } else if (is_high_boundary) {
-                                reg_y(i, j, k, n) = fy_m(i, j, k, n); // Northern boundary: fine cell is bottom (j-1), uses fy_m
-                            } else {
-                                reg_y(i, j, k, n) = 0.0;
-                            }
-                        }
-                    });
-                }
-            }
-        }
-
-        // ------------------------------------------------------------------------
-        // 7. SYNCHRONIZE WITH FLUX REGISTERS
-        // ------------------------------------------------------------------------
+        // Send mapped boundary fluxes to AMReX FluxRegisters
         if (fr_as_crse)
         {
             for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
             {
                 const amrex::Real dA = (idim == 0) ? dy : dx;
                 const amrex::Real scale = -dt*dA;
-                fr_as_crse->CrseInit(fluxes_crse[idim], idim, 0, 0, U_n.nComp(), scale,
+                fr_as_crse->CrseInit(flux_crse[idim], idim, 0, 0, U_n.nComp(), scale,
                                      amrex::FluxRegister::ADD);
             }
         }
@@ -548,9 +489,8 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             {
                 const amrex::Real dA = (idim == 0) ? dy : dx;
                 const amrex::Real scale = dt*dA;
-                fr_as_fine->FineAdd(fluxes_fine[idim], idim, 0, 0, U_n.nComp(), scale);
+                fr_as_fine->FineAdd(flux_fine[idim], idim, 0, 0, U_n.nComp(), scale);
             }
         }
     }
 }
-

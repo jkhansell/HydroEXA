@@ -86,6 +86,7 @@ def plot_amrex_grid(
     cbar_label="Value",
     title=None,
     nodata_val=-9999,
+    logplot=False
 ):
     if grid_colors is None:
         grid_colors = ["white", "yellow", "cyan", "magenta", "red", "lime"]
@@ -145,6 +146,7 @@ def plot_amrex_grid(
         data,
         cmap=cmap,
         shading="auto",
+        norm="log" if logplot else None
     )
 
     if show_grids:
@@ -193,7 +195,8 @@ plot_amrex_grid(
     title="Water Depth with AMR Levels",
     output_file="h_fluid.png",
     figsize=(16, 15),
-    cmap="jet"
+    cmap="jet",
+    logplot=False
 )
 
 plot_amrex_grid(

@@ -1,7 +1,7 @@
 # =====================================================================
 # HYDROEXA CORE SIMULATION PARAMETERS
 # =====================================================================
-HydroEXA.max_time          = 100.0 
+HydroEXA.max_time          = 200.0 
 HydroEXA.model             = "Roe"  # Roe, RoeExner, RoeNoZProjection, HLLC, LaxWendroff, etc 
 HydroEXA.cfl               = 0.5    # CFL safety factor for hydrodynamic time stepping
 
@@ -9,7 +9,18 @@ HydroEXA.cfl               = 0.5    # CFL safety factor for hydrodynamic time st
 # Format is an array matching Level 0, Level 1, Level 2, etc.
 HydroEXA.h_grad_thresh     = 0.05  0.02  0.01 0.005
 HydroEXA.umag_grad_thresh   = 0.2   0.1   0.05  0.025
-HydroEXA.z_grad_thresh   = 1.0   1.25   1.5 1.75  
+HydroEXA.z_grad_thresh   = 1.0   1.25   1.5 1.75
+
+# =====================================================================
+# BOUNDARY CONDITIONS
+# =====================================================================
+# Physical BC type indices:
+#   0 = Interior (periodic/interior)    3 = Symmetry
+#   1 = Inflow                          4 = SlipWall
+#   2 = Outflow                         5 = NoSlipWall
+# Format: lo_bc = x_lo y_lo [z_lo]   hi_bc = x_hi y_hi [z_hi]
+HydroEXA.lo_bc         =  2 2  3
+HydroEXA.hi_bc         =  2 2  3
 
 # =====================================================================
 # AMR RUNTIME ADAPTIVITY CONFIGURATION
@@ -32,7 +43,7 @@ amr.ref_ratio              = 2 2 2   # Refinement factor between sequential tier
 # SYSTEM PARALLEL DATA / INPUT OUTPUT MANAGEMENT
 # ====================================================================
 io.chk_freq                = 10000     # Frequency checkpoint snapshot is dropped
-io.plot_freq               = 1      # Plotfile dump interval
+io.plot_freq               = 25      # Plotfile dump interval
 io.chk_type                = HDF5    # HDF5 or Native serialization formats
 io.async_io                = 1       # 1 = Non-blocking asynchronous I/O threads
 

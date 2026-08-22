@@ -43,23 +43,17 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
         }
     }
 
-    // --- Advance this level ---------------------------------------------
-    //if (amrex::ParallelDescriptor::IOProcessor()) {
-    //    LOG(INFO, "[Level " + std::to_string(lev) + " step " + std::to_string(istep[lev] + 1) + "] "
-    //           "ADVANCE time=" + std::to_string(t_new[lev]) + " dt=" + std::to_string(dt[lev]));
-    //}
-
     t_old[lev] = t_new[lev];
     t_new[lev] += dt[lev];
 
     // Advance this level: fill BCs, compute fluxes, update conservative vars
-    AdvanceLevel(lev, t_new[lev], dt[lev]);
+    AdvanceLevel(lev, t_old[lev], dt[lev]);
 
     ++istep[lev];
 
     // --- Recurse into finer levels (subcycle) ---------------------------
     if (lev < finest_level) {
-        for (int i = 1; i < nsubsteps[lev+1]; ++i) {
+        for (int i = 1; i <= nsubsteps[lev+1]; ++i) {
             TimeStepWithSubcycling(lev + 1, time + (i-1) * dt[lev + 1], i);
         }
 
@@ -68,8 +62,10 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
             flux_reg[lev + 1]->Reflux(U_new[lev], 1.0, 0, 0, U_new[lev].nComp(), geom[lev]);
         }
 
-        // Average finer level down to this level (conservative)
-        AverageDownTo(lev, U_new);
+        // Note: Each AMR level maintains its own U_new independently.
+        // Reflux ensures conservation at coarse-fine interfaces.
+        // AverageDown is NOT called on U_new — it would overwrite the
+        // reflux-corrected coarse solution with non-conservative interpolation.
     }
 }
 
