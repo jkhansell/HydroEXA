@@ -1,124 +1,38 @@
-import yt
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-
-import numpy as np
-import yt
-
-def count_nans_per_level(plotfile_path, variable_name="h_fluid", nodata_val=-9999):
-    """
-    Counts NaNs and NoData sentinel values for each AMR level in an AMReX plotfile.
-    """
-    print(f"[YT] Inspecting plotfile for NaNs: {plotfile_path}")
-    ds = yt.load(plotfile_path)
-
-    # Dictionary to aggregate stats per level
-    level_stats = {}
-
-    for grid in ds.index.grids:
-        level = grid.Level
-        if level not in level_stats:
-            level_stats[level] = {
-                "total_cells": 0,
-                "nan_count": 0,
-                "nodata_count": 0,
-                "valid_count": 0
-            }
-
-        # Extract raw native grid data for this patch
-        raw_data = grid[("boxlib", variable_name)].to_ndarray()
-
-        # Total cells in this grid patch
-        patch_total = raw_data.size
-
-        # Detect IEEE NaNs
-        patch_nans = np.count_nonzero(np.isnan(raw_data))
-
-        # Detect Sentinel NoData values (e.g. -9999 or values < -9000)
-        patch_nodata = np.count_nonzero(raw_data == nodata_val)
-
-        # Combine NaNs and NoData
-        patch_invalid = np.count_nonzero(np.isnan(raw_data) | (raw_data == nodata_val))
-        patch_valid = patch_total - patch_invalid
-
-        # Accumulate stats for this level
-        level_stats[level]["total_cells"] += patch_total
-        level_stats[level]["nan_count"] += patch_nans
-        level_stats[level]["nodata_count"] += patch_nodata
-        level_stats[level]["valid_count"] += patch_valid
-
-    # Summary Report
-    print("=" * 65)
-    print(f"{'Level':<7} | {'Total Cells':<12} | {'NaN Count':<10} | {'-9999 Count':<12} | {'Valid Cells':<12}")
-    print("-" * 65)
-
-    for level in sorted(level_stats.keys()):
-        stats = level_stats[level]
-        print(
-            f"Level {level:<1} | "
-            f"{stats['total_cells']:<12} | "
-            f"{stats['nan_count']:<10} | "
-            f"{stats['nodata_count']:<12} | "
-            f"{stats['valid_count']:<12}"
-        )
-    print("=" * 65)
-
-    return level_stats
-
-# Usage:
-# stats = count_nans_per_level("plt00000", variable_name="h_fluid")
+import glob
+import os
+import re
+import sys
+import imageio.v2 as imageio
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import yt
 
-def plot_amrex_grid(
+def natural_sort_key(s):
+    """Sorts plotfiles in numerical order (e.g. plt00010 before plt00100)."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+def process_single_frame(
     plotfile_path,
     variable_name="h_fluid",
-    output_file=None,
-    cmap="terrain",
-    figsize=(15, 6),
-    dpi=300,
+    output_file="frame.png",
+    cmap="jet",
+    figsize=(12, 10),
+    dpi=150,
     show_grids=True,
     grid_colors=None,
     background_color="#1a1a1a",
     cbar_label="Value",
-    title=None,
     nodata_val=-9999,
     logplot=False
 ):
     if grid_colors is None:
         grid_colors = ["white", "yellow", "cyan", "magenta", "red", "lime"]
 
-    if output_file is None:
-        output_file = f"grid_viz_{variable_name}.png"
-
-    if title is None:
-        title = f"AMR Grid Topology ({variable_name})"
-
-    print(f"[YT] Loading plotfile: {plotfile_path}")
     ds = yt.load(plotfile_path)
 
-    # --- NEW: Count NaNs / NoData per Level ---
-    level_stats = {}
-    for grid in ds.index.grids:
-        lev = grid.Level
-        if lev not in level_stats:
-            level_stats[lev] = {"total": 0, "nans": 0, "nodata": 0}
-
-        arr = grid[("boxlib", variable_name)].to_ndarray()
-        level_stats[lev]["total"] += arr.size
-        level_stats[lev]["nans"] += np.count_nonzero(np.isnan(arr))
-        level_stats[lev]["nodata"] += np.count_nonzero(arr == nodata_val)
-
-    print("\n[DIAGNOSTIC] --- NaN / NoData Count Per Level ---")
-    for lev in sorted(level_stats.keys()):
-        tot = level_stats[lev]["total"]
-        nans = level_stats[lev]["nans"]
-        nodata = level_stats[lev]["nodata"]
-        print(f"  Level {lev}: Total={tot}, NaNs={nans}, NoData({nodata_val})={nodata}, Valid={tot - nans - nodata}")
-    print("--------------------------------------------------\n")
+    # Extract simulation time if available
+    sim_time = float(ds.current_time) if hasattr(ds, "current_time") else 0.0
 
     left_edge = ds.domain_left_edge.to_ndarray()
     right_edge = ds.domain_right_edge.to_ndarray()
@@ -169,7 +83,11 @@ def plot_amrex_grid(
     cbar = fig.colorbar(mesh, ax=ax, pad=0.01, shrink=0.7)
     cbar.set_label(cbar_label)
 
-    ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
+    # Clean plotfile folder name for title
+    filename_clean = os.path.basename(os.path.normpath(plotfile_path))
+    full_title = f"{filename_clean} | Variable: {variable_name} | Time: {sim_time:.4f} s"
+
+    ax.set_title(full_title, fontsize=12, fontweight="bold", pad=10)
     ax.set_xlabel("Physical X [m]")
     ax.set_ylabel("Physical Y [m]")
 
@@ -181,31 +99,105 @@ def plot_amrex_grid(
     plt.savefig(output_file, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"[YT] Saved: {output_file}")
+from PIL import Image
 
-
-import sys
-
-pltfile = sys.argv[1]
-
-plot_amrex_grid(
-    pltfile,
+def generate_time_series_gif(
+    plotfiles,
     variable_name="h_fluid",
     cbar_label="Water Depth",
-    title="Water Depth with AMR Levels",
-    output_file="h_fluid.png",
-    figsize=(16, 15),
     cmap="jet",
+    output_gif="evolution.gif",
+    duration=0.25,
     logplot=False
-)
+):
+    print(f"\n[INFO] Processing {len(plotfiles)} plotfiles for '{variable_name}'...")
+    
+    frame_files = []
+    temp_dir = f"_temp_frames_{variable_name}"
+    os.makedirs(temp_dir, exist_ok=True)
 
-plot_amrex_grid(
-    pltfile,
-    variable_name="z_bathymetry",
-    cbar_label="Bed Elevation",
-    title="Bed Elevation with AMR Levels",
-    output_file="z_bath.png",
-    figsize=(16, 15),
-    cmap="terrain"
-)
+    for i, pltfile in enumerate(plotfiles):
+        frame_name = os.path.join(temp_dir, f"frame_{i:04d}.png")
+        print(f"  --> [{i+1}/{len(plotfiles)}] Rendering: {pltfile}")
+        
+        try:
+            process_single_frame(
+                plotfile_path=pltfile,
+                variable_name=variable_name,
+                output_file=frame_name,
+                cbar_label=cbar_label,
+                cmap=cmap,
+                logplot=logplot
+            )
+            frame_files.append(frame_name)
+        except Exception as e:
+            print(f"  [ERROR] Failed to process {pltfile}: {e}")
 
+    if not frame_files:
+        print(f"[ERROR] No valid frames created for {variable_name}.")
+        return
+
+    print(f"[INFO] Compiling GIF: {output_gif}")
+    
+    # --- FIX: Load frames and force all to match the exact dimensions of Frame 0 ---
+    pil_images = [Image.open(f) for f in frame_files]
+    target_size = pil_images[0].size  # (width, height)
+
+    resized_np_images = [
+        np.array(img.resize(target_size, Image.Resampling.LANCZOS)) if img.size != target_size else np.array(img)
+        for img in pil_images
+    ]
+
+    # Save animation with uniform shapes
+    imageio.mimsave(output_gif, resized_np_images, duration=duration, loop=0)
+    print(f"[SUCCESS] Saved GIF: {output_gif}")
+
+    # Cleanup temporary PNG frames and close PIL pointers
+    for img in pil_images:
+        img.close()
+        
+    for f in frame_files:
+        os.remove(f)
+    os.rmdir(temp_dir)
+
+
+if __name__ == "__main__":
+    # Accept a directory path or pattern as CLI argument, default to current dir searching for "plt*"
+    pattern = sys.argv[1] if len(sys.argv) > 1 else "plt*"
+
+    if os.path.isdir(pattern) and not pattern.startswith("plt"):
+        search_pattern = os.path.join(pattern, "plt*")
+    else:
+        search_pattern = pattern
+
+    # Find all plotfiles and sort numerically
+    plotfiles = [p for p in glob.glob(search_pattern) if os.path.isdir(p) or "Header" in os.listdir(p)]
+    plotfiles = sorted(plotfiles, key=natural_sort_key)
+
+    if not plotfiles:
+        print(f"[ERROR] No plotfiles matching '{search_pattern}' were found.")
+        sys.exit(1)
+
+    print(f"[INFO] Found {len(plotfiles)} plotfile directories.")
+
+    # 1. Generate GIF for Water Depth (h_fluid)
+    generate_time_series_gif(
+        plotfiles=plotfiles,
+        variable_name="h_fluid",
+        cbar_label="Water Depth [m]",
+        cmap="jet",
+        output_gif="h_fluid_evolution.gif",
+        duration=0.25,
+        logplot=False
+    )
+
+    # 2. Generate GIF for Bed Elevation (z_bathymetry)
+    # generate_time_series_gif(
+    #     plotfiles=plotfiles,
+    #     variable_name="z_bathymetry",
+    #     cbar_label="Bed Elevation [m]",
+    #     cmap="terrain",
+    #     output_gif="z_bathymetry_evolution.gif",
+    #     duration=0.25,
+    #     logplot=False
+    # )

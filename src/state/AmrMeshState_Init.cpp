@@ -1,8 +1,6 @@
 #include <state/AmrMeshState.H>
 #include <utils/Logging.H>
 
-
-
 AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
                            int terrain_ref_lev, 
                            HDF5SpatialMetadata& meta,

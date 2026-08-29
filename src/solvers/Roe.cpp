@@ -339,6 +339,14 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         }
     }
 
+    U_n.FillBoundary(amr_geom.periodicity());
+    {
+        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+        BndryPhysBC physbc(amr_geom, ctx.UBCs, bndry_func);
+        physbc.FillBoundary(U_n, 0, U_n.nComp(), amrex::IntVect(1), time, 0);
+    }
+
     amrex::Print()
         << "Level " << lev
         << " h=["  << U_n.min(0) << ", " << U_n.max(0) << "] "

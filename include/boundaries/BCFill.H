@@ -100,54 +100,102 @@ struct HydroEXAFill
         amrex::GeometryData const& geom,
         const amrex::Real /*time*/,
         const amrex::BCRec* bcr,
-        const int /*bcomp*/,
+        const int bcomp,
         const int /*orig_comp*/) const
     {
-        const amrex::Box domain = geom.Domain();
+        const amrex::Box& domain = geom.Domain();
+        const int i = iv[0];
+        const int j = iv[1];
 
-        for (int n = 0; n < numcomp; ++n)
-        {
-            const int comp = dcomp + n;
-
-            // X-low
-            if (iv[0] < domain.smallEnd(0) &&
-                bcr->lo(0) == amrex::BCType::ext_dir)
-            {
-                amrex::IntVect src = iv;
-                src[0] = domain.smallEnd(0);
-                dest(iv, comp) = dest(src, comp);
+        // --------------------------------------------------------------------
+        // X-LOW Domain Boundary (i < domain.smallEnd(0))
+        // --------------------------------------------------------------------
+        if (i < domain.smallEnd(0)) {
+            int ilast = domain.smallEnd(0);
+            for (int n = 0; n < numcomp; ++n) {
+                int bc = bcr[bcomp + n].lo(0);
+                
+                if (bc == amrex::BCType::foextrap) {
+                    // Outflow / Zero-Gradient Extrapolation
+                    dest(i, j, 0, dcomp + n) = dest(ilast, j, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_even) {
+                    // Reflective Wall (Symmetric)
+                    int i_sym = 2 * ilast - 1 - i;
+                    dest(i, j, 0, dcomp + n) = dest(i_sym, j, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_odd) {
+                    // Reflective Wall (Anti-symmetric for normal momentum hu)
+                    int i_sym = 2 * ilast - 1 - i;
+                    dest(i, j, 0, dcomp + n) = -dest(i_sym, j, 0, dcomp + n);
+                }
             }
+        }
 
-            // X-high
-            else if (iv[0] > domain.bigEnd(0) &&
-                     bcr->hi(0) == amrex::BCType::ext_dir)
-            {
-                amrex::IntVect src = iv;
-                src[0] = domain.bigEnd(0);
-                dest(iv, comp) = dest(src, comp);
+        // --------------------------------------------------------------------
+        // X-HIGH Domain Boundary (i > domain.bigEnd(0))
+        // --------------------------------------------------------------------
+        if (i > domain.bigEnd(0)) {
+            int ilast = domain.bigEnd(0);
+            for (int n = 0; n < numcomp; ++n) {
+                int bc = bcr[bcomp + n].hi(0);
+
+                if (bc == amrex::BCType::foextrap) {
+                    dest(i, j, 0, dcomp + n) = dest(ilast, j, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_even) {
+                    int i_sym = 2 * ilast + 1 - i;
+                    dest(i, j, 0, dcomp + n) = dest(i_sym, j, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_odd) {
+                    int i_sym = 2 * ilast + 1 - i;
+                    dest(i, j, 0, dcomp + n) = -dest(i_sym, j, 0, dcomp + n);
+                }
             }
+        }
 
-#if (AMREX_SPACEDIM >= 2)
+        // --------------------------------------------------------------------
+        // Y-LOW Domain Boundary (j < domain.smallEnd(1))
+        // --------------------------------------------------------------------
+        if (j < domain.smallEnd(1)) {
+            int jlast = domain.smallEnd(1);
+            for (int n = 0; n < numcomp; ++n) {
+                int bc = bcr[bcomp + n].lo(1);
 
-            // Y-low
-            if (iv[1] < domain.smallEnd(1) &&
-                bcr->lo(1) == amrex::BCType::ext_dir)
-            {
-                amrex::IntVect src = iv;
-                src[1] = domain.smallEnd(1);
-                dest(iv, comp) = dest(src, comp);
+                if (bc == amrex::BCType::foextrap) {
+                    dest(i, j, 0, dcomp + n) = dest(i, jlast, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_even) {
+                    int j_sym = 2 * jlast - 1 - j;
+                    dest(i, j, 0, dcomp + n) = dest(i, j_sym, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_odd) {
+                    int j_sym = 2 * jlast - 1 - j;
+                    dest(i, j, 0, dcomp + n) = -dest(i, j_sym, 0, dcomp + n);
+                }
             }
+        }
 
-            // Y-high
-            else if (iv[1] > domain.bigEnd(1) &&
-                     bcr->hi(1) == amrex::BCType::ext_dir)
-            {
-                amrex::IntVect src = iv;
-                src[1] = domain.bigEnd(1);
-                dest(iv, comp) = dest(src, comp);
+        // --------------------------------------------------------------------
+        // Y-HIGH Domain Boundary (j > domain.bigEnd(1))
+        // --------------------------------------------------------------------
+        if (j > domain.bigEnd(1)) {
+            int jlast = domain.bigEnd(1);
+            for (int n = 0; n < numcomp; ++n) {
+                int bc = bcr[bcomp + n].hi(1);
+
+                if (bc == amrex::BCType::foextrap) {
+                    dest(i, j, 0, dcomp + n) = dest(i, jlast, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_even) {
+                    int j_sym = 2 * jlast + 1 - j;
+                    dest(i, j, 0, dcomp + n) = dest(i, j_sym, 0, dcomp + n);
+                } 
+                else if (bc == amrex::BCType::reflect_odd) {
+                    int j_sym = 2 * jlast + 1 - j;
+                    dest(i, j, 0, dcomp + n) = -dest(i, j_sym, 0, dcomp + n);
+                }
             }
-
-#endif
         }
     }
 };

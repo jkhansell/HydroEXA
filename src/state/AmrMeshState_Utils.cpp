@@ -83,7 +83,7 @@ SolverContext AmrMeshState::GetSolverContext()
 
         flux_reg,
 
-        amr_p.do_reflux,
+        static_cast<bool>(amr_p.do_reflux),
         finest_level,
 
         //==========================================================================

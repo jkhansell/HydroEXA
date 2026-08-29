@@ -1,7 +1,7 @@
 # =====================================================================
 # HYDROEXA CORE SIMULATION PARAMETERS
 # =====================================================================
-HydroEXA.max_time          = 200.0 
+HydroEXA.max_time          = 50.0 
 HydroEXA.model             = "Roe"  # Roe, RoeExner, RoeNoZProjection, HLLC, LaxWendroff, etc 
 HydroEXA.cfl               = 0.5    # CFL safety factor for hydrodynamic time stepping
 
@@ -27,7 +27,7 @@ HydroEXA.hi_bc         =  2 2  3
 # =====================================================================
 amr.max_level              = 1       # Max internal refinement steps. (Code scales to level+1)
 amr.regrid_int             = 10      # Dynamic grid refinement/regridding loop window interval
-amr.do_reflux              = 1       # 1 = Enable conservation flux-correction at coarse-fine faces
+amr.do_reflux              = 0       # 1 = Enable conservation flux-correction at coarse-fine faces
 amr.do_subcycle            = 1       # 1 = Temporal subcycling (fine levels take smaller timesteps)
 amr.blocking_factor        = 16
 amr.v                      = 1 
@@ -43,7 +43,7 @@ amr.ref_ratio              = 2 2 2   # Refinement factor between sequential tier
 # SYSTEM PARALLEL DATA / INPUT OUTPUT MANAGEMENT
 # ====================================================================
 io.chk_freq                = 10000     # Frequency checkpoint snapshot is dropped
-io.plot_freq               = 25      # Plotfile dump interval
+io.plot_freq               = 1      # Plotfile dump interval
 io.chk_type                = HDF5    # HDF5 or Native serialization formats
 io.async_io                = 1       # 1 = Non-blocking asynchronous I/O threads
 

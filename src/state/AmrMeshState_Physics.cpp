@@ -34,7 +34,6 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
 
     if (amr_p.regrid_int > 0 && lev < max_level && istep[lev] > last_regrid_step[lev]) {
         if (istep[lev] % amr_p.regrid_int == 0) {
-            int old_finest = finest_level;
             regrid(lev, time);
 
             for (int k = lev; k <= finest_level; ++k) {
@@ -66,6 +65,7 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
         // Reflux ensures conservation at coarse-fine interfaces.
         // AverageDown is NOT called on U_new — it would overwrite the
         // reflux-corrected coarse solution with non-conservative interpolation.
+        AverageDownTo(lev, U_new);
     }
 }
 

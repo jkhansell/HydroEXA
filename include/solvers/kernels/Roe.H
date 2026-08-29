@@ -50,16 +50,12 @@ void roeSolver(
     amrex::Real lambda1 = utilde;
     amrex::Real lambda2 = utilde + ctilde;
 	
-    amrex::Real lambdaE0 = 0.0;
-    amrex::Real lambdaE2 = 0.0;
-
     // --- entropy fix ---
     {
         amrex::Real ei = uhati - std::sqrt(PhysConstants::GRAV() * hi);
         amrex::Real ej = uhatj - std::sqrt(PhysConstants::GRAV() * hj);
 
         if (ei < 0.0 && ej > 0.0) {
-            lambdaE0 = lambda0 - ei * (ej - lambda0) / (ej - ei);
             lambda0  = ei * (ej - lambda0) / (ej - ei);
         }
 
@@ -67,7 +63,6 @@ void roeSolver(
         ej = uhatj + std::sqrt(PhysConstants::GRAV() * hj);
 
         if (ei < 0.0 && ej > 0.0) {
-            lambdaE2 = lambda2 - ej * (lambda2 - ei) / (ej - ei);
             lambda2  = ej * (lambda2 - ei) / (ej - ei);
         }
     }
