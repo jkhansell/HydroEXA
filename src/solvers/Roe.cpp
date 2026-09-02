@@ -18,8 +18,8 @@ Roe::compute_amrex_effective_fluxes(
     const int offset_y = (dir == 1) ? 1 : 0;
 
     amrex::ParallelFor(face_box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-        int ri = i;            int rj = j;
         int li = i - offset_x; int lj = j - offset_y;
+        int ri = i;            int rj = j;
 
         amrex::Real hi  = U(li, lj, k, 0);
         amrex::Real hui = U(li, lj, k, 1);
@@ -241,8 +241,8 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     {
         amrex::BoxArray ba = ctx.grids[lev];
         ba.surroundingNodes(dir);
-        D_minus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-        D_plus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+        D_minus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 1);
+        D_plus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 1);
 
         D_minus_mf[dir].setVal(0.0);
         D_plus_mf[dir].setVal(0.0);
@@ -255,24 +255,14 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     const amrex::Real dy_local = dy;
     const amrex::Real dt_local = dt;
 
+    // fill coarse/fine boundaries
+    // ctx.FillPatch(lev, time, U_o, ctx.UBCs, 0, U_o.nComp());
+    // ctx.FillPatch(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
     U_o.FillBoundary(amr_geom.periodicity());
     Terrain.FillBoundary(amr_geom.periodicity());
 
-    // Apply physical boundary conditions to ghost cells
-    {
-        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
-        BndryPhysBC physbc(amr_geom, ctx.UBCs, bndry_func);
-        physbc.FillBoundary(U_o, 0, U_o.nComp(), amrex::IntVect(1), time, 0);
-    }
-    {
-        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
-        BndryPhysBC physbc(amr_geom, ctx.TerrainBCs, bndry_func);
-        physbc.FillBoundary(Terrain, 0, Terrain.nComp(), amrex::IntVect(1), time, 0);
-    }
 
-#ifdef AMREX_USE_OMP
+#ifdef AMREX_USE_OMP    
 #pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
     {
@@ -299,11 +289,11 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         }
     }
 
-    // we might not need this because we don't have ghosts
-    // for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) { 
-    //     flux_L[dir].FillBoundary(geom.periodicity());
-    //     flux_R[dir].FillBoundary(geom.periodicity());
-    // }
+    // After compute_amrex_effective_fluxes loops finish:
+    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) { 
+        D_minus_mf[dir].FillBoundary(amr_geom.periodicity());
+        D_plus_mf[dir].FillBoundary(amr_geom.periodicity());
+    }
 
     // ------------------------------------------------------------------------
     // 4. LOCAL CONSERVATIVE CELL UPDATE (Exact Fluctuation Differencing)
@@ -337,14 +327,6 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                 }
             });
         }
-    }
-
-    U_n.FillBoundary(amr_geom.periodicity());
-    {
-        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
-        BndryPhysBC physbc(amr_geom, ctx.UBCs, bndry_func);
-        physbc.FillBoundary(U_n, 0, U_n.nComp(), amrex::IntVect(1), time, 0);
     }
 
     amrex::Print()

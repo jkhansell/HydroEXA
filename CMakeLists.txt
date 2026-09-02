@@ -90,20 +90,18 @@ if (HDF5_IS_PARALLEL)
 endif()
 
 # ============================================================
-# Enforce GPU language compilation rules on standard variables
+# GPU backend compilation flags (no language override)
 # ============================================================
+# Do NOT force LANGUAGE CUDA/HIP on HydroEXA sources — nvcc's C++
+# parser cannot handle C++20 features (std::numbers, std::ssize)
+# used in AMReX headers.  Let g++/clang++ compile the sources and
+# rely on AMReX's own CUDA/HIP compilation rules for its objects.
 
-# Detect CUDA or HIP backend directly from AMReX configuration flags
 if(AMReX_GPU_BACKEND STREQUAL "CUDA" OR HYDROEXA_GPU_BACKEND MATCHES "kabre.*|juwelsbooster.*|local.*")
-    message(STATUS "Enforcing CUDA compilation language on all HydroEXA sources.")
-    set_target_properties(HydroEXA PROPERTIES 
-        CUDA_STANDARD 17
-        CUDA_SEPARABLE_COMPILATION ON
-    )
-    set_source_files_properties(${HYDROEXA_SOURCES} PROPERTIES LANGUAGE CUDA)
+    message(STATUS "CUDA backend detected — linking against AMReX CUDA targets.")
+    set_target_properties(HydroEXA PROPERTIES CUDA_STANDARD 17)
 
 elseif(AMReX_GPU_BACKEND STREQUAL "HIP" OR HYDROEXA_GPU_BACKEND MATCHES "frontier.*")
-    message(STATUS "Enforcing HIP compilation language on all HydroEXA sources.")
+    message(STATUS "HIP backend detected — linking against AMReX HIP targets.")
     set_target_properties(HydroEXA PROPERTIES HIP_STANDARD 17)
-    set_source_files_properties(${HYDROEXA_SOURCES} PROPERTIES LANGUAGE HIP)
 endif()

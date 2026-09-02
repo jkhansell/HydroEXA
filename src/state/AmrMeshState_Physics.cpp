@@ -21,9 +21,6 @@ void AmrMeshState::ComputeDt()
 
 /* ------------------------------------------------------------------ */
 /*  TimeStepWithSubcycling — recursive AMR time advance               */
-/*  Pattern from AMReX tutorials:                                      */
-/*  https://github.com/AMReX-Codes/amrex-tutorials/tree/main/         */
-/*  ExampleCodes/Amr/Advection_AmrCore                                */
 /* ------------------------------------------------------------------ */
 void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iteration)
 {
@@ -34,10 +31,36 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
 
     if (amr_p.regrid_int > 0 && lev < max_level && istep[lev] > last_regrid_step[lev]) {
         if (istep[lev] % amr_p.regrid_int == 0) {
+            int old_finest = finest_level;
             regrid(lev, time);
 
             for (int k = lev; k <= finest_level; ++k) {
                 last_regrid_step[k] = istep[k];
+            }
+
+            for (int k = old_finest + 1; k <= finest_level; ++k) {
+                // Inherit dt using exact refinement ratio
+                dt[k] = dt[k - 1] / MaxRefRatio(k - 1);
+
+                // Compute CFL requirement for the newly created grid level
+                amrex::Real dt_cfl = solver.compute_dt_level(U_new, DynamicTerrain, geom, k, physics_p.cfl);
+                amrex::ParallelDescriptor::ReduceRealMin(&dt_cfl, 1);
+
+                // Only perform the multi-level backward propagation if the inherited dt violates CFL
+                if (dt[k] > dt_cfl) {
+                    amrex::Print() << "WARNING: new level " << k
+                                << " inherited dt=" << dt[k]
+                                << " but CFL requires dt=" << dt_cfl 
+                                << ". Recalculating dt across all levels.\n";
+
+                    // 1. Set the newly restricted fine level dt
+                    dt[k] = dt_cfl;
+
+                    // 2. Propagate backward to update all coarser levels (level k-1 down to 0)
+                    for (int p = k - 1; p >= 0; --p) {
+                        dt[p] = dt[p + 1] * MaxRefRatio(p);
+                    }
+                }
             }
         }
     }
@@ -53,7 +76,7 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
     // --- Recurse into finer levels (subcycle) ---------------------------
     if (lev < finest_level) {
         for (int i = 1; i <= nsubsteps[lev+1]; ++i) {
-            TimeStepWithSubcycling(lev + 1, time + (i-1) * dt[lev + 1], i);
+            TimeStepWithSubcycling(lev + 1, t_old[lev + 1], i);
         }
 
         // Reflux: correct lev based on coarse-fine flux mismatch
@@ -61,10 +84,7 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
             flux_reg[lev + 1]->Reflux(U_new[lev], 1.0, 0, 0, U_new[lev].nComp(), geom[lev]);
         }
 
-        // Note: Each AMR level maintains its own U_new independently.
-        // Reflux ensures conservation at coarse-fine interfaces.
-        // AverageDown is NOT called on U_new — it would overwrite the
-        // reflux-corrected coarse solution with non-conservative interpolation.
+        // Average down covered coarse cells from fine grid
         AverageDownTo(lev, U_new);
     }
 }

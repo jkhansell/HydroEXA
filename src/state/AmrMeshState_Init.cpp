@@ -97,18 +97,22 @@ void AmrMeshState::Initialize() {
         InitFromScratch(time); // Calls PostProcessBaseGrids to prune the mesh using NODATA
         //PostInit(); // Post Init Routine to fill lev < static_terrain_lev
 
+        // Store initial conserved quantities for conservation error tracking
+        StoreInitialMassMomentum();
+
         // deallocating initial static fluid MultiFab pointer since we
         // already allocated the initial DynamicFluid Multifab and now refinement or coarsening
         // is tackled by physics
         StaticFluid.reset();
     }
 
-    IO->WritePlotfile(
-        U_new, DynamicTerrain, 
-        initial_step, time, 
-        Geom(), refRatio(), 
-        finest_level
-    );
+    // We do this in HydroEXA.cpp
+    // IO->WritePlotfile(
+    //     U_new, DynamicTerrain, 
+    //     initial_step, time, 
+    //     Geom(), refRatio(), 
+    //     finest_level
+    // );
 }
 
 

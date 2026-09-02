@@ -80,9 +80,9 @@ set_machine_env() {
             ;;
 
         local.gpu)
-            export CC=gcc
-            export CXX=g++
-            export FC=gfortran
+            export CC=mpicc
+            export CXX=mpicxx
+            export FC=mpif90
 
             GPU_FLAGS="
                 -DCMAKE_CUDA_ARCHITECTURES=native
@@ -91,9 +91,9 @@ set_machine_env() {
             ;;
 
         local.cpu)
-            export CC=gcc
-            export CXX=g++
-            export FC=gfortran
+            export CC=mpicc
+            export CXX=mpicxx
+            export FC=mpif90
 
             GPU_FLAGS="
                 -DAMReX_GPU_BACKEND=NONE

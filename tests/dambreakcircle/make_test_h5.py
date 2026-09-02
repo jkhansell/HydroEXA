@@ -7,7 +7,7 @@ import numpy as np
 filename = "CircularDambreak.h5"
 
 # Grid Dimensions
-nx, ny = 1024, 1024
+nx, ny = 256, 256
 dx, dy = 1.0, 1.0  # 1-meter spatial resolution (200m x 200m domain)
 x_ll, y_ll = 0.0, 0.0
 

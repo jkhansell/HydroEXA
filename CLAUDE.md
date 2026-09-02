@@ -43,6 +43,16 @@ uv sync
 
 Python dependencies are for post-processing/visualization: `geopandas`, `h5py`, `matplotlib`, `scipy`, `yt`, `rasterio`, `shapely`, `polars`.
 
+### Local build notes (RTX 4070 / Ubuntu 24.04)
+
+Use `mamba run -n hydroexa_env` to run the build inside the conda environment — this ensures `mpicc`/`mpicxx` wrappers and HDF5 cmake config are found consistently.
+
+* `machine_selection.sh` uses `mpicc`/`mpicxx` for `local.gpu`/`local.cpu` so MPI wrappers match conda HDF5's transitive MPI dependencies (avoids system/conda MPI mismatch).
+* Do **NOT** force `LANGUAGE CUDA` on HydroEXA C++ sources — nvcc's C++ parser cannot handle C++20 features (`std::numbers::pi_v`, `std::ssize`) used in AMReX headers. Sources compile with `mpicxx`; AMReX handles its own CUDA compilation.
+* **Debug builds recommended** for development (better backtraces). Release for production.
+* Test input generation: `uv run python tests/make_test_h5.py` (creates `CircularDambreak.h5`).
+* Run from `tests/` directory: `mamba run -n hydroexa_env ../build/HydroEXA inputs`
+
 ## Code Architecture
 
 ```

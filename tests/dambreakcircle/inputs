@@ -7,7 +7,7 @@ HydroEXA.cfl               = 0.5    # CFL safety factor for hydrodynamic time st
 
 # Multi-level tagging thresholds (gradient thresholds per AMR level)
 # Format is an array matching Level 0, Level 1, Level 2, etc.
-HydroEXA.h_grad_thresh     = 0.05  0.02  0.01 0.005
+HydroEXA.h_grad_thresh     = 0.2   0.1   0.05  0.025
 HydroEXA.umag_grad_thresh   = 0.2   0.1   0.05  0.025
 HydroEXA.z_grad_thresh   = 1.0   1.25   1.5 1.75
 
@@ -25,9 +25,9 @@ HydroEXA.hi_bc         =  2 2  3
 # =====================================================================
 # AMR RUNTIME ADAPTIVITY CONFIGURATION
 # =====================================================================
-amr.max_level              = 1       # Max internal refinement steps. (Code scales to level+1)
+amr.max_level              = 0       # Max internal refinement steps. (Code scales to level+1)
 amr.regrid_int             = 10      # Dynamic grid refinement/regridding loop window interval
-amr.do_reflux              = 0       # 1 = Enable conservation flux-correction at coarse-fine faces
+amr.do_reflux              = 1       # 1 = Enable conservation flux-correction at coarse-fine faces
 amr.do_subcycle            = 1       # 1 = Temporal subcycling (fine levels take smaller timesteps)
 amr.blocking_factor        = 16
 amr.v                      = 1 

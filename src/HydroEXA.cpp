@@ -41,6 +41,7 @@ void HydroEXA::ReadParameters() {
         pp.query("model", physics_params.model);
         pp.query("cfl", physics_params.cfl);
         pp.query("max_time", runtime_params.max_time);
+        pp.query("mass_diag_freq", runtime_params.mass_diag_freq);
 
         int n = pp.countval("h_grad_thresh");
         if (n > 0) {
@@ -153,11 +154,12 @@ HydroEXA::Compute() {
 
     amrex::Real plot_time_next = (io_params.plot_freq > 0) ? io_params.plot_freq : -1.0;
     amrex::Real chk_time_next  = (io_params.chk_freq  > 0) ? io_params.chk_freq  : -1.0;
+    amrex::Real mass_time_next = (runtime_params.mass_diag_freq > 0) ? runtime_params.mass_diag_freq : -1.0;
     int plot_iter = 0;
     int chk_iter  = 0;
 
     MeshState->WritePlotfile(plot_iter, runtime_params.etime);
-
+    plot_iter++;
 
     while (runtime_params.etime < runtime_params.max_time)
     {
@@ -171,6 +173,14 @@ HydroEXA::Compute() {
 
         runtime_params.etime = MeshState->t_new[0];
         runtime_params.iteration++;
+
+        // Mass & momentum conservation diagnostics
+        if (runtime_params.mass_diag_freq > 0 &&
+            runtime_params.etime >= mass_time_next)
+        {
+            MeshState->ComputeMassDiagnostics(runtime_params.etime, runtime_params.iteration);
+            mass_time_next += runtime_params.mass_diag_freq;
+        }
 
         const double wall_end = amrex::ParallelDescriptor::second();
 
