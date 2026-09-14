@@ -23,6 +23,9 @@ struct SolverContext
     amrex::Vector<amrex::MultiFab>& U_old;
     amrex::Vector<amrex::MultiFab>& Terrain;
 
+    amrex::Vector<amrex::Real> t_new;
+    amrex::Vector<amrex::Real> t_old;
+
     //==========================================================================
     // Mesh hierarchy
     //==========================================================================

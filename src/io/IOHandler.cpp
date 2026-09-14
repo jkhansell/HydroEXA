@@ -13,6 +13,8 @@
 
 // local includes
 #include <io/IOHandler.H>
+#include <io/NativePlotFile.H>
+#include <io/HDF5PlotFile.H>
 #include <utils/Logging.H>
 
 void IOHandler::ReadHDF5Hyperslab(
@@ -318,74 +320,15 @@ void IOHandler::WritePlotfile(
     const amrex::Vector<amrex::IntVect> &ref_ratio,
     int finest_level)
 {
-    // 1. Safely calculate the TRUE number of active, fully allocated levels.
-    // This entirely prevents the "nullptr" gap segfault.
-    int num_active_levels = 0;
-    for (int lev = 0; lev <= finest_level; ++lev) {
-        // If a level's BoxArray hasn't been defined yet, we break out.
-        // We do NOT use 'continue', because AMReX requires contiguous level arrays.
-        if (U[lev].boxArray().empty() || Terrain[lev].boxArray().empty()) {
-            break; 
-        }
-        num_active_levels++;
+    if (plotfile_writer_type == "hdf5") {
+        WriteHDF5Plotfile(
+            plotfile_prefix, iteration, time,
+            U, Terrain, geom, ref_ratio, finest_level);
+    } else {
+        WriteNativePlotfile(
+            plotfile_prefix, iteration, time,
+            U, Terrain, geom, ref_ratio, finest_level);
     }
-
-    if (num_active_levels == 0) {
-        LOG_WARN("No valid levels found. Skipping plotfile.");
-        return;
-    }
-
-    std::string plotfilename = amrex::Concatenate("plt", iteration, 5);
-
-    // 2. Set variable string descriptors safely
-    int ncomp_U = U[0].nComp();
-    int ncomp_Terrain = Terrain[0].nComp();
-    int total_comps = ncomp_U + ncomp_Terrain;
-
-    amrex::Vector<std::string> varnames;
-    varnames.push_back("h_fluid");
-    varnames.push_back("hu_momentum");
-    varnames.push_back("hv_momentum");
-    varnames.push_back("z_bathymetry");
-    
-    // SAFETY CATCH: If you ever change ncomps (e.g., adding roughness), 
-    // this prevents AMReX from crashing due to an out-of-bounds string read.
-    while (varnames.size() < total_comps) {
-        varnames.push_back("extra_comp_" + std::to_string(varnames.size()));
-    }
-
-    // 3. Set up pointers and temporary multi-component Fabs safely
-    amrex::Vector<const amrex::MultiFab *> output_mf(num_active_levels);
-    amrex::Vector<amrex::MultiFab> temp_mf(num_active_levels);
-
-    for (int lev = 0; lev < num_active_levels; ++lev)
-    {
-        // Allocate local temporary space tracking identical layout geometry
-        temp_mf[lev].define(U[lev].boxArray(), U[lev].DistributionMap(), total_comps, 0);
-
-        // Map components sequentially across memory block offsets
-        amrex::MultiFab::Copy(temp_mf[lev], U[lev],       0, 0,       ncomp_U,       0);
-        amrex::MultiFab::Copy(temp_mf[lev], Terrain[lev], 0, ncomp_U, ncomp_Terrain, 0);
-
-        // Guarantee a valid memory address is provided
-        output_mf[lev] = &temp_mf[lev];
-    }
-
-    // 4. Track local integer state steps matching AMReX criteria signatures
-    amrex::Vector<int> istep(num_active_levels, iteration);
-
-    // 5. Fire parallel output dump sequence
-    // Notice we pass the full, untouched `geom` and `ref_ratio` arrays. 
-    // AMReX handles `max_level` sized tracking arrays natively without issue.
-    amrex::WriteMultiLevelPlotfile(
-        plotfilename,
-        num_active_levels,
-        output_mf,
-        varnames,
-        geom,           
-        time,
-        istep,
-        ref_ratio);     
 }
 
 void IOHandler::WriteCheckpoint(const CheckpointerContext& ctx, int iteration)

@@ -58,6 +58,26 @@ public:
         }, m_solver);
     }
 
+    amrex::Real compute_dt_level(
+        const amrex::Vector<amrex::MultiFab>& U,
+        const amrex::Vector<amrex::MultiFab>& terrain,
+        const amrex::Vector<amrex::Geometry>& geom,
+        int lev, amrex::Real cfl
+    ){
+        amrex::Real dt_lev = -1.0;
+        std::visit([&](auto&& solver) -> amrex::Real {
+            using T = std::decay_t<decltype(solver)>;
+
+            if constexpr (std::is_same_v<T, std::monostate>) {
+                throw std::runtime_error("[SolverVariant Error] Solver not initialized.");
+            } else {
+                dt_lev = solver.compute_dt_level(U, terrain, geom, lev, cfl);
+                return dt_lev;
+            }
+        }, m_solver);
+        return dt_lev;
+    }
+
     void tag_cells(
         amrex::TagBoxArray& tags,
         const amrex::MultiFab& U,

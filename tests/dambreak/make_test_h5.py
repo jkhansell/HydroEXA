@@ -24,8 +24,8 @@ import numpy as np
 filename = "RectangularDambreak.h5"
 
 # Grid Dimensions
-nx, ny = 256, 16  # High resolution in x, coarse in y (1D problem)
-dx, dy = 1.0, 1.0  # 1-meter spatial resolution
+nx, ny = 512, 16  # High resolution in x, coarse in y (1D problem)
+dx, dy = 0.1, 0.1  # 1-meter spatial resolution
 x_ll, y_ll = 0.0, 0.0
 
 # Physics Parameters

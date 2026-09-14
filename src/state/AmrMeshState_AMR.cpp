@@ -16,7 +16,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrai
     }
 
     dynTerrain.setVal(-9999.0);
-    const amrex::Geometry& amr_geom = geom[lev];
+    const amrex::Geometry& amr_geom = Geom()[lev];
 
     // 2. Static is Finer than AMR: Restrict (Average Down)
     if (static_terrain_lev > lev)
@@ -42,8 +42,8 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrai
         amrex::Real dummy_time = 0.0;
 
 
-        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+        amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
 
         // Separate physical BC objects for Coarse and Fine Geometries
         BndryPhysBC cphysbc(static_geom, Terrain_bcs, bndry_func);
@@ -64,7 +64,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrai
         
     }
 
-    dynTerrain.FillBoundary(geom[lev].periodicity());
+    dynTerrain.FillBoundary(Geom()[lev].periodicity());
 }
 
 void AmrMeshState::FluidMapStaticToDynamic(int lev)
@@ -73,8 +73,8 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
     
     amr_mf.setVal(0.0);
 
-    const amrex::Geometry& amr_geom = geom[lev];
-    
+    const amrex::Geometry& amr_geom = Geom()[lev];
+
     // 2. Static is Finer than AMR: Restrict (Average Down)
     if (static_terrain_lev > lev) 
     {
@@ -100,8 +100,8 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
         amrex::Real dummy_time = 0.0;
 
         {
-            amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-            using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
+            amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+            using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
             BndryPhysBC physbc(static_geom, U_bcs, bndry_func);
             amrex::InterpFromCoarseLevel(amr_mf, dummy_time, *StaticFluid, 0, 0, ncomp_U,
                                          static_geom, amr_geom,
@@ -110,7 +110,7 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
         }
     }
 
-    amr_mf.FillBoundary(geom[lev].periodicity());
+    amr_mf.FillBoundary(Geom()[lev].periodicity());
 }
 
 /* ---------------------- AMReX AmrCore Base Functions  ----------------------*/
@@ -131,8 +131,6 @@ void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time,
 
     TerrainMapStaticToDynamic(lev, DynamicTerrain[lev]);
     FluidMapStaticToDynamic(lev);
-
-    amrex::MultiFab::Copy(U_old[lev], U_new[lev], 0, 0, ncomp_U, ngrow_U); // we might not need this but whatever 
 
     DynamicTerrain[lev].FillBoundary(Geom(lev).periodicity());
     U_new[lev].FillBoundary(Geom(lev).periodicity());
@@ -303,7 +301,7 @@ void AmrMeshState::ClearLevel(int lev) {
 void AmrMeshState::ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time, int ngrow)
 {   
     if (lev >= max_level) return;
-    solver.tag_cells(tags, U_new[lev], DynamicTerrain[lev], geom[lev], lev, time, physics_p);
+    solver.tag_cells(tags, U_new[lev], DynamicTerrain[lev], Geom()[lev], lev, time, physics_p);
 }
 
 /* ---------------------- AMReX AmrCore Base Functions  ----------------------*/
@@ -315,25 +313,53 @@ void AmrMeshState::FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, am
         amrex::Vector<amrex::Real> stime;
         GetData(0, time, smf, stime);
 
-        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
-        BndryPhysBC physbc(geom[lev], U_bcs, bndry_func);
+        amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
+        BndryPhysBC physbc(Geom()[lev], bcs, bndry_func);
         amrex::FillPatchSingleLevel(mf, time, smf, stime, 0, icomp, ncomp,
-                                    geom[lev], physbc, 0);
+                                    Geom()[lev], physbc, 0);
     } else {
         amrex::Vector<amrex::MultiFab*> cmf, fmf;
         amrex::Vector<amrex::Real> ctime, ftime;
         GetData(lev-1, time, cmf, ctime);
         GetData(lev  , time, fmf, ftime);
 
-        amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
-        BndryPhysBC cphysbc(geom[lev-1], U_bcs, bndry_func);
-        BndryPhysBC fphysbc(geom[lev], U_bcs, bndry_func);
+        amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
+        BndryPhysBC cphysbc(Geom()[lev-1], bcs, bndry_func);
+        BndryPhysBC fphysbc(Geom()[lev], bcs, bndry_func);
         amrex::FillPatchTwoLevels(mf, time, cmf, ctime, fmf, ftime,
-                                  0, icomp, ncomp, geom[lev-1], geom[lev],
+                                  0, icomp, ncomp, Geom()[lev-1], Geom()[lev],
                                   cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                  &amrex::cell_cons_interp, U_bcs, 0);
+                                  &amrex::cell_cons_interp, bcs, 0);
+    }
+}
+
+void AmrMeshState::FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp) {
+    if (lev == 0) {
+        amrex::Vector<amrex::MultiFab*> smf;
+        amrex::Vector<amrex::Real> stime;
+        GetTerrainData(0, time, smf, stime);
+
+        amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
+        BndryPhysBC physbc(Geom()[lev], bcs, bndry_func);
+        amrex::FillPatchSingleLevel(mf, time, smf, stime, 0, icomp, ncomp,
+                                    Geom()[lev], physbc, 0);
+    } else {
+        amrex::Vector<amrex::MultiFab*> cmf, fmf;
+        amrex::Vector<amrex::Real> ctime, ftime;
+        GetTerrainData(lev-1, time, cmf, ctime);
+        GetTerrainData(lev  , time, fmf, ftime);
+
+        amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+        using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
+        BndryPhysBC cphysbc(Geom()[lev-1], bcs, bndry_func);
+        BndryPhysBC fphysbc(Geom()[lev], bcs, bndry_func);
+        amrex::FillPatchTwoLevels(mf, time, cmf, ctime, fmf, ftime,
+                                  0, icomp, ncomp, Geom()[lev-1], Geom()[lev],
+                                  cphysbc, 0, fphysbc, 0, refRatio(lev-1),
+                                  &amrex::cell_cons_interp, bcs, 0);
     }
 }
 
@@ -348,25 +374,25 @@ void AmrMeshState::FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& 
         amrex::Abort("FillCoarsePatch: how did this happen?");
     }
 
-    amrex::GpuBndryFuncFab<HydroEXAFill> bndry_func(HydroEXAFill{});
-    using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<HydroEXAFill>>;
-    BndryPhysBC cphysbc(geom[lev-1], bcs, bndry_func);
-    BndryPhysBC fphysbc(geom[lev], bcs, bndry_func);
-    amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, geom[lev-1], geom[lev],
+    amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+    using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
+    BndryPhysBC cphysbc(Geom()[lev-1], bcs, bndry_func);
+    BndryPhysBC fphysbc(Geom()[lev], bcs, bndry_func);
+    amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, Geom()[lev-1], Geom()[lev],
                                  cphysbc, 0, fphysbc, 0, refRatio(lev-1),
                                  &amrex::cell_cons_interp, bcs, 0);
 }
 
 void AmrMeshState::AverageDown (amrex::Vector<amrex::MultiFab>& arr) {
-    for (int lev = finest_level-1; lev >= 0; --lev) {
+    for (int lev = finestLevel()-1; lev >= 0; --lev) {
         amrex::average_down(arr[lev+1], arr[lev],
-                            geom[lev+1], geom[lev],
+                            Geom()[lev+1], Geom()[lev],
                             0, arr[lev].nComp(), refRatio(lev));
     }
 }
 
 void AmrMeshState::AverageDownTo(int crse_lev, amrex::Vector<amrex::MultiFab>&  arr) {
     amrex::average_down(arr[crse_lev+1], arr[crse_lev],
-                        geom[crse_lev+1], geom[crse_lev],
+                        Geom()[crse_lev+1], Geom()[crse_lev],
                         0, arr[crse_lev].nComp(), refRatio(crse_lev));
 }

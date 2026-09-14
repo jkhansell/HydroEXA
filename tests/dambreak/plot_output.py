@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Visualize HydroEXA rectangular dam break plotfiles.
+Visualize HydroEXA rectangular dam break plotfiles with analytical solution.
 
-Produces:
+Produces images in an ``outputs/`` directory:
   1. 2D colormap of water depth h (planform view) with MeshBlock outlines
-  2. 1D line cut along y=center showing h, hu, hv profiles
+  2. 1D line cut along y=center showing h, hu, hv profiles + analytical
   3. Time-series GIF of h evolution
 
 The 1D line cut is the key diagnostic: for a perfect 1D problem,
@@ -16,6 +16,7 @@ Usage:
   uv run python plot_output.py plt00010     # process a single plotfile
 """
 
+import argparse
 import glob
 import os
 import re
@@ -27,6 +28,14 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
 import numpy as np
+
+# Add script directory to path so we can import analytical.py
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from analytical import dambreak_on_wet_no_friction_analytical
+
+# ------------------------------------------------------------------
+OUTPUT_DIR = "outputs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ------------------------------------------------------------------
 try:
@@ -129,7 +138,10 @@ def extract_line_cut(ds, var_key, y_center=None, ny_lines=7):
     return x, profiles
 
 
-def plot_single_frame(plotfile_path, output_prefix=""):
+# ------------------------------------------------------------------
+
+def plot_single_frame(plotfile_path, output_prefix="",
+                      hl=0.005, hr=0.001, x0=5.0):
     """Plot a single time step: 2D field (top) + 1D line cuts (bottom)."""
     if not HAS_YT:
         print(f"  [WARN] yt not available for {plotfile_path}; skipping 2D plot.")
@@ -202,7 +214,7 @@ def plot_single_frame(plotfile_path, output_prefix=""):
     cbar = plt.colorbar(im, ax=ax1, orientation="horizontal",
                         fraction=0.03, pad=0.08, label="h [m]")
 
-    # ---- Bottom: 1D line cuts with legend ----
+    # ---- Bottom: 1D line cuts + analytical solution ----
     ax2 = fig.add_subplot(gs[1])
     x, profiles = extract_line_cut(ds, "h", ny_lines=7)
     if profiles is not None:
@@ -215,6 +227,13 @@ def plot_single_frame(plotfile_path, output_prefix=""):
             label = f"y = {y_pos:.1f} m"
             ax2.plot(x, profile, alpha=alpha, linewidth=1.0, label=label)
 
+        # --- Analytical solution overlay ---
+        x_ana = np.linspace(left_edge[0], right_edge[0], 500)
+        h_ana, _ = dambreak_on_wet_no_friction_analytical(
+            sim_time, x_ana, L=10.0, hl=hl, hr=hr, x0=x0
+        )
+        ax2.plot(x_ana, h_ana, "k-", linewidth=2.5, label="Analytical", zorder=10)
+
         ax2.set_xlabel("X [m]")
         ax2.set_ylabel("h [m]")
         ax2.set_title("Line cuts at multiple y-positions — should all overlap")
@@ -223,19 +242,22 @@ def plot_single_frame(plotfile_path, output_prefix=""):
 
     # Use manual adjustment instead of tight_layout (incompatible with horizontal colorbar)
     fig.subplots_adjust(left=0.08, right=0.95, top=0.88, bottom=0.15)
-    outname = f"{output_prefix}frame_{sim_time:.4f}.png" if output_prefix else f"frame_{sim_time:.4f}.png"
+    outname = os.path.join(OUTPUT_DIR, f"frame_{sim_time:.4f}.png")
     plt.savefig(outname, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {outname}")
     return outname
 
 
-def generate_gif(plotfiles, variable_name="h", output_gif="h_evolution.gif",
-                 duration=0.2, output_prefix=""):
+def generate_gif(plotfiles, variable_name="h", output_gif=None,
+                 duration=0.2, hl=0.005, hr=0.001, x0=5.0):
     """Generate a time-series GIF from plotfiles."""
     if not HAS_YT:
         print("[ERROR] yt is required for GIF generation. Install with: pip install yt")
         return
+
+    if output_gif is None:
+        output_gif = os.path.join(OUTPUT_DIR, "h_evolution.gif")
 
     import imageio.v2 as imageio
 
@@ -244,8 +266,7 @@ def generate_gif(plotfiles, variable_name="h", output_gif="h_evolution.gif",
 
     for i, pltfile in enumerate(plotfiles):
         print(f"  [{i+1}/{len(plotfiles)}] {os.path.basename(pltfile)}")
-        frame_name = f"{output_prefix}frame_{i:04d}.png"
-        saved = plot_single_frame(pltfile, output_prefix=frame_name)
+        saved = plot_single_frame(pltfile, hl=hl, hr=hr, x0=x0)
         if saved:
             frame_files.append(saved)
 
@@ -254,16 +275,29 @@ def generate_gif(plotfiles, variable_name="h", output_gif="h_evolution.gif",
         imageio.mimsave(output_gif, images, duration=duration, loop=0)
         print(f"[SUCCESS] Saved: {output_gif}")
         # Cleanup
-        for f in frame_files:
-            if os.path.exists(f):
-                os.remove(f)
+        #for f in frame_files:
+        #    if os.path.exists(f):
+        #        os.remove(f)
     else:
         print("[ERROR] No frames generated.")
 
 
 # ------------------------------------------------------------------
 if __name__ == "__main__":
-    pattern = sys.argv[1] if len(sys.argv) > 1 else "plt*"
+    parser = argparse.ArgumentParser(
+        description="Plot HydroEXA dam-break plotfiles with analytical solution.")
+    parser.add_argument(
+        "pattern", nargs="?", default="plt*",
+        help="Glob pattern or directory containing plotfiles (default: plt*)")
+    parser.add_argument("--hl", type=float, default=0.005,
+                        help="Upstream water depth (default: 0.005)")
+    parser.add_argument("--hr", type=float, default=0.001,
+                        help="Downstream water depth (default: 0.001)")
+    parser.add_argument("--x0", type=float, default=5.0,
+                        help="Initial dam location (default: 5.0)")
+    args = parser.parse_args()
+
+    pattern = args.pattern
 
     if os.path.isdir(pattern) and not pattern.startswith("plt"):
         search_pattern = os.path.join(pattern, "plt*")
@@ -283,7 +317,7 @@ if __name__ == "__main__":
     # Plot each frame individually, collect saved filenames for GIF
     frame_files = []
     for pf in plotfiles:
-        saved = plot_single_frame(pf)
+        saved = plot_single_frame(pf, hl=args.hl, hr=args.hr, x0=args.x0)
         if saved:
             frame_files.append(saved)
 
@@ -292,11 +326,9 @@ if __name__ == "__main__":
         import imageio.v2 as imageio
         images = [imageio.imread(f) for f in frame_files if os.path.exists(f)]
         if images:
-            imageio.mimsave("h_evolution.gif", images, duration=0.2, loop=0)
-            print(f"[SUCCESS] Saved: h_evolution.gif")
-            for f in frame_files:
-                if os.path.exists(f):
-                    os.remove(f)
+            gif_path = os.path.join(OUTPUT_DIR, "h_evolution.gif")
+            imageio.mimsave(gif_path, images, duration=0.2, loop=0)
+            print(f"[SUCCESS] Saved: {gif_path}")
 
     print("\n[DONE] All frames and GIF generated.")
     print("Tip: For the rectangular dam break, check the line-cut plot.")

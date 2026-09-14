@@ -34,7 +34,7 @@ int main(int argc, char* argv[]){
             ParallelDescriptor::ReduceRealMax(end_total ,ParallelDescriptor::IOProcessorNumber());
             LOG(INFO, "\nTotal Time: " + std::to_string(end_total) + '\n');
         }
-    }  // end of scope where Fortran librarys are visible
+    } 
 
     amrex::Finalize();
 

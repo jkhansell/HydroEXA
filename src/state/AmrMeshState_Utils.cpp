@@ -30,7 +30,7 @@ void AmrMeshState::WritePlotfile(int iteration, amrex::Real time) {
         U_new, DynamicTerrain,
         iteration, time,
         Geom(), refRatio(),
-        finest_level
+        finestLevel()
     );
 }
 
@@ -82,7 +82,7 @@ SolverContext AmrMeshState::GetSolverContext()
         flux_reg,
 
         static_cast<bool>(amr_p.do_reflux),
-        finest_level,
+        finestLevel(),
 
         //==========================================================================
         // Mesh services
@@ -116,7 +116,7 @@ CheckpointerContext AmrMeshState::GetCheckpointerContext()
         U_new, U_old, DynamicTerrain,
         grids, dmap,
         dt, t_new, t_old,
-        finest_level, istep[0], istep
+        finestLevel(), istep[0], istep
     };
 }
 
@@ -146,16 +146,16 @@ void AmrMeshState::ComputeMassDiagnostics(amrex::Real time, int iteration)
         amrex::Real ke = 0.0;
         amrex::Real min_h = std::numeric_limits<amrex::Real>::max();
     };
-    amrex::Vector<LevelStats> local_stats(finest_level + 1);
+    amrex::Vector<LevelStats> local_stats(finestLevel() + 1);
 
-    for (int lev = 0; lev <= finest_level; ++lev)
+    for (int lev = 0; lev <= finestLevel(); ++lev)
     {
         // Skip levels that haven't been allocated yet
         if (U_new[lev].boxArray().empty() || DynamicTerrain[lev].boxArray().empty()) {
             continue;
         }
 
-        const amrex::Geometry& g = geom[lev];
+        const amrex::Geometry& g = Geom()[lev];
         const amrex::Real dx = g.CellSize(0);
         const amrex::Real dy = g.CellSize(1);
         const amrex::Real dA = dx * dy;
@@ -221,7 +221,7 @@ void AmrMeshState::ComputeMassDiagnostics(amrex::Real time, int iteration)
     }
 
     // MPI reduce across all ranks
-    for (int lev = 0; lev <= finest_level; ++lev) {
+    for (int lev = 0; lev <= finestLevel(); ++lev) {
         amrex::ParallelDescriptor::ReduceRealSum(&local_stats[lev].mass,     1, amrex::ParallelDescriptor::IOProcessorNumber());
         amrex::ParallelDescriptor::ReduceRealSum(&local_stats[lev].mom_x,    1, amrex::ParallelDescriptor::IOProcessorNumber());
         amrex::ParallelDescriptor::ReduceRealSum(&local_stats[lev].mom_y,    1, amrex::ParallelDescriptor::IOProcessorNumber());
@@ -234,7 +234,7 @@ void AmrMeshState::ComputeMassDiagnostics(amrex::Real time, int iteration)
     {
         amrex::Real tot_mass = 0.0, tot_mx = 0.0, tot_my = 0.0, tot_ke = 0.0;
         amrex::Real g_min_h = std::numeric_limits<amrex::Real>::max();
-        for (int lev = 0; lev <= finest_level; ++lev) {
+        for (int lev = 0; lev <= finestLevel(); ++lev) {
             tot_mass  += local_stats[lev].mass;
             tot_mx    += local_stats[lev].mom_x;
             tot_my    += local_stats[lev].mom_y;
@@ -284,15 +284,15 @@ void AmrMeshState::StoreInitialMassMomentum()
         amrex::Real mom_y = 0.0;
         amrex::Real ke = 0.0;
     };
-    amrex::Vector<LevelStats> local_stats(finest_level + 1);
+    amrex::Vector<LevelStats> local_stats(finestLevel() + 1);
 
-    for (int lev = 0; lev <= finest_level; ++lev)
+    for (int lev = 0; lev <= finestLevel(); ++lev)
     {
         if (U_new[lev].boxArray().empty() || DynamicTerrain[lev].boxArray().empty()) {
             continue;
         }
 
-        const amrex::Geometry& g = geom[lev];
+        const amrex::Geometry& g = Geom()[lev];
         const amrex::Real dx = g.CellSize(0);
         const amrex::Real dy = g.CellSize(1);
         const amrex::Real dA = dx * dy;
@@ -347,7 +347,7 @@ void AmrMeshState::StoreInitialMassMomentum()
     }
 
     // MPI reduce
-    for (int lev = 0; lev <= finest_level; ++lev) {
+    for (int lev = 0; lev <= finestLevel(); ++lev) {
         amrex::ParallelDescriptor::ReduceRealSum(&local_stats[lev].mass, 1, amrex::ParallelDescriptor::IOProcessorNumber());
         amrex::ParallelDescriptor::ReduceRealSum(&local_stats[lev].mom_x, 1, amrex::ParallelDescriptor::IOProcessorNumber());
         amrex::ParallelDescriptor::ReduceRealSum(&local_stats[lev].mom_y, 1, amrex::ParallelDescriptor::IOProcessorNumber());
@@ -358,7 +358,7 @@ void AmrMeshState::StoreInitialMassMomentum()
     if (amrex::ParallelDescriptor::IOProcessor())
     {
         amrex::Real tot_mass = 0.0, tot_mx = 0.0, tot_my = 0.0, tot_ke = 0.0;
-        for (int lev = 0; lev <= finest_level; ++lev) {
+        for (int lev = 0; lev <= finestLevel(); ++lev) {
             tot_mass += local_stats[lev].mass;
             tot_mx   += local_stats[lev].mom_x;
             tot_my   += local_stats[lev].mom_y;

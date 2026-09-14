@@ -2,50 +2,6 @@
 #include <solvers/kernels/Roe.H>
 #include <boundaries/BCFill.H>
 
-void
-Roe::compute_amrex_effective_fluxes(
-    const amrex::Box& face_box,
-    amrex::Array4<amrex::Real const> const& U,
-    amrex::Array4<amrex::Real const> const& terrain,
-    amrex::Array4<amrex::Real> const& D_minus_mf,
-    amrex::Array4<amrex::Real> const& D_plus_mf,
-    const amrex::Real dt, const amrex::Real dx, const int dir)
-{
-    const amrex::Real nx = (dir == 0) ? 1.0 : 0.0;
-    const amrex::Real ny = (dir == 1) ? 1.0 : 0.0;
-
-    const int offset_x = (dir == 0) ? 1 : 0;
-    const int offset_y = (dir == 1) ? 1 : 0;
-
-    amrex::ParallelFor(face_box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-        int li = i - offset_x; int lj = j - offset_y;
-        int ri = i;            int rj = j;
-
-        amrex::Real hi  = U(li, lj, k, 0);
-        amrex::Real hui = U(li, lj, k, 1);
-        amrex::Real hvi = U(li, lj, k, 2);
-        amrex::Real zi  = terrain(li, lj, k, 0);
-        amrex::Real ni  = terrain(li, lj, k, 1);
-
-        amrex::Real hj  = U(ri, rj, k, 0);
-        amrex::Real huj = U(ri, rj, k, 1);
-        amrex::Real hvj = U(ri, rj, k, 2);
-        amrex::Real zj  = terrain(ri, rj, k, 0);
-        amrex::Real nj  = terrain(ri, rj, k, 1);
-
-        amrex::Real D_minus[3] = {}; 
-        amrex::Real D_plus[3] = {};
-        roeSolver(hi, hui, hvi, zi, ni,
-                  hj, huj, hvj, zj, nj,
-                  D_minus, D_plus, dt, dx, nx, ny);
-
-        for (int c = 0; c < 3; ++c) {
-            D_minus_mf(i, j, k, c) = D_minus[c];
-            D_plus_mf(i, j, k, c) = D_plus[c];
-        }
-    });
-}
-
 amrex::Real
 Roe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
                      const amrex::Vector<amrex::MultiFab>& terrain,
@@ -197,6 +153,51 @@ void Roe::tag_cells_Impl(amrex::TagBoxArray& tags,
     }
 }
 
+
+void
+Roe::compute_amrex_effective_fluxes(
+    const amrex::Box& face_box,
+    amrex::Array4<amrex::Real const> const& U,
+    amrex::Array4<amrex::Real const> const& terrain,
+    amrex::Array4<amrex::Real> const& D_minus_mf,
+    amrex::Array4<amrex::Real> const& D_plus_mf,
+    const amrex::Real dt, const amrex::Real dx, const int dir)
+{
+    const amrex::Real nx = (dir == 0) ? 1.0 : 0.0;
+    const amrex::Real ny = (dir == 1) ? 1.0 : 0.0;
+
+    const int offset_x = (dir == 0) ? 1 : 0;
+    const int offset_y = (dir == 1) ? 1 : 0;
+
+    amrex::ParallelFor(face_box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+        int li = i - offset_x;  int ri = i; 
+        int lj = j - offset_y;  int rj = j;
+
+        amrex::Real hi  = U(li, lj, k, 0);
+        amrex::Real hui = U(li, lj, k, 1);
+        amrex::Real hvi = U(li, lj, k, 2);
+        amrex::Real zi  = terrain(li, lj, k, 0);
+        amrex::Real ni  = terrain(li, lj, k, 1);
+
+        amrex::Real hj  = U(ri, rj, k, 0);
+        amrex::Real huj = U(ri, rj, k, 1);
+        amrex::Real hvj = U(ri, rj, k, 2);
+        amrex::Real zj  = terrain(ri, rj, k, 0);
+        amrex::Real nj  = terrain(ri, rj, k, 1);
+
+        amrex::Real D_minus[3] = {}; 
+        amrex::Real D_plus[3] = {};
+        roeSolver(hi, hui, hvi, zi, ni,
+                  hj, huj, hvj, zj, nj,
+                  D_minus, D_plus, dt, dx, nx, ny);
+
+        for (int c = 0; c < 3; ++c) {
+            D_minus_mf(i, j, k, c) = D_minus[c];
+            D_plus_mf(i, j, k, c) = D_plus[c];
+        }
+    });
+}
+
 void
 Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real time) {
 
@@ -231,6 +232,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         fr_as_crse->setVal(0.0);
     }
 
+
     // ------------------------------------------------------------------------
     // 2. ALLOCATE DUAL EFFECTIVE FLUXES (FL and FR)
     // ------------------------------------------------------------------------
@@ -241,8 +243,8 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     {
         amrex::BoxArray ba = ctx.grids[lev];
         ba.surroundingNodes(dir);
-        D_minus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 1);
-        D_plus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 1);
+        D_minus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+        D_plus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
 
         D_minus_mf[dir].setVal(0.0);
         D_plus_mf[dir].setVal(0.0);
@@ -256,11 +258,8 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     const amrex::Real dt_local = dt;
 
     // fill coarse/fine boundaries
-    // ctx.FillPatch(lev, time, U_o, ctx.UBCs, 0, U_o.nComp());
-    // ctx.FillPatch(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
-    U_o.FillBoundary(amr_geom.periodicity());
-    Terrain.FillBoundary(amr_geom.periodicity());
-
+    ctx.FillPatch(lev, time, U_o, ctx.UBCs, 0, U_o.nComp());
+    //ctx.FillPatch(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
 
 #ifdef AMREX_USE_OMP    
 #pragma omp parallel if (Gpu::notInLaunchRegion())
@@ -268,32 +267,24 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     {
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
-            amrex::Box bx_x = mfi.nodaltilebox(0);
-            amrex::Box bx_y = mfi.nodaltilebox(1);
-
             auto const& statein = U_o.array(mfi);
             auto const& z_arr = Terrain.array(mfi);
 
-            // Output FL and FR directly from roeSolver
-            compute_amrex_effective_fluxes(
-                bx_x, statein, z_arr,
-                D_minus_mf[0].array(mfi), D_plus_mf[0].array(mfi),
-                dt_local, dx_local, 0
-            );
+            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+                
+                amrex::Box face_box = mfi.nodaltilebox(dir);
+                // Output FL and FR directly from roeSolver
 
-            compute_amrex_effective_fluxes(
-                bx_y, statein, z_arr,
-                D_minus_mf[1].array(mfi), D_plus_mf[1].array(mfi),
-                dt_local, dy_local, 1
-            );
+                amrex::Real dA = (dir == 0) ? dx_local : dy_local; 
+                compute_amrex_effective_fluxes(
+                    face_box, statein, z_arr,
+                    D_minus_mf[dir].array(mfi), D_plus_mf[dir].array(mfi),
+                    dt_local, dA, dir
+                );
+            }
         }
     }
 
-    // After compute_amrex_effective_fluxes loops finish:
-    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) { 
-        D_minus_mf[dir].FillBoundary(amr_geom.periodicity());
-        D_plus_mf[dir].FillBoundary(amr_geom.periodicity());
-    }
 
     // ------------------------------------------------------------------------
     // 4. LOCAL CONSERVATIVE CELL UPDATE (Exact Fluctuation Differencing)
@@ -335,152 +326,156 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         << "hu=[" << U_n.min(1) << ", " << U_n.max(1) << "] "
         << "hv=[" << U_n.min(2) << ", " << U_n.max(2) << "]\n";
 
+    /*
     // ------------------------------------------------------------------------
     // 5. PREPARE AND SYNCHRONIZE WITH FLUX REGISTERS
     // ------------------------------------------------------------------------
-    if (fr_as_crse || fr_as_fine)
-    {
-        amrex::MultiFab flux_fine[AMREX_SPACEDIM];
-        amrex::MultiFab flux_crse[AMREX_SPACEDIM];
+    if (ctx.do_reflux) {
 
-        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
+        if (fr_as_crse || fr_as_fine)
         {
-            amrex::BoxArray ba = ctx.grids[lev];
-            ba.surroundingNodes(dir);
+            amrex::MultiFab flux_fine[AMREX_SPACEDIM];
+            amrex::MultiFab flux_crse[AMREX_SPACEDIM];
 
-            if (fr_as_fine)
+            for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
             {
-                flux_fine[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-                flux_fine[dir].setVal(0.0);
+                amrex::BoxArray ba = ctx.grids[lev];
+                ba.surroundingNodes(dir);
+
+                if (fr_as_fine)
+                {
+                    flux_fine[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+                    flux_fine[dir].setVal(0.0);
+                }
+
+                if (fr_as_crse)
+                {
+                    flux_crse[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+                    flux_crse[dir].setVal(0.0);
+                }
             }
+
+            // --------------------------------------------------------------------
+            // Coarse coverage mask
+            //
+            // 0 = Coarse cell
+            // 1 = Covered by finer level
+            // --------------------------------------------------------------------
+            std::unique_ptr<amrex::iMultiFab> coarse_mask;
 
             if (fr_as_crse)
             {
-                flux_crse[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-                flux_crse[dir].setVal(0.0);
+                coarse_mask = std::make_unique<amrex::iMultiFab>(makeFineMask(U_n,ctx.grids[lev+1],ctx.RefRatio(lev),0,1));
             }
-        }
 
-        // --------------------------------------------------------------------
-        // Coarse coverage mask
-        //
-        // 0 = Coarse cell
-        // 1 = Covered by finer level
-        // --------------------------------------------------------------------
-        std::unique_ptr<amrex::iMultiFab> coarse_mask;
-
-        if (fr_as_crse)
-        {
-            coarse_mask = std::make_unique<amrex::iMultiFab>(makeFineMask(U_n,ctx.grids[lev+1],ctx.RefRatio(lev),0,1));
-        }
-
-    #ifdef AMREX_USE_OMP
-    #pragma omp parallel if (Gpu::notInLaunchRegion())
-    #endif
-        {
-            for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+        #ifdef AMREX_USE_OMP
+        #pragma omp parallel if (Gpu::notInLaunchRegion())
+        #endif
             {
-                const int ncomp = U_o.nComp();
-                const amrex::Box& valid_bx = mfi.validbox();
-
-                auto const& mask = fr_as_crse ? coarse_mask->const_array(mfi) : amrex::Array4<int const>();
-
-                for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
+                for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
                 {
-                    amrex::Box nbx = mfi.nodaltilebox(dir);
+                    const int ncomp = U_o.nComp();
+                    const amrex::Box& valid_bx = mfi.validbox();
 
-                    auto const& Dm = D_minus_mf[dir].array(mfi);   // D-
-                    auto const& Dp = D_plus_mf[dir].array(mfi);   // D+
+                    auto const& mask = fr_as_crse ? coarse_mask->const_array(mfi) : amrex::Array4<int const>();
 
-                    auto const& ff = fr_as_fine ? flux_fine[dir].array(mfi) : amrex::Array4<amrex::Real>();
-                    auto const& fc = fr_as_crse ? flux_crse[dir].array(mfi) : amrex::Array4<amrex::Real>();
-
-                    const int i_low  = valid_bx.smallEnd(dir);
-                    const int i_high = valid_bx.bigEnd(dir) + 1;
-
-                    amrex::ParallelFor(nbx,
-                    [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+                    for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
                     {
-                        int face_idx = (dir == 0) ? i : (dir == 1) ? j : k;
+                        amrex::Box nbx = mfi.nodaltilebox(dir);
 
-                        int left_is_fine  = 0;
-                        int right_is_fine = 0;
+                        auto const& Dm = D_minus_mf[dir].array(mfi);   // D-
+                        auto const& Dp = D_plus_mf[dir].array(mfi);   // D+
 
-                        if (fr_as_crse)
+                        auto const& ff = fr_as_fine ? flux_fine[dir].array(mfi) : amrex::Array4<amrex::Real>();
+                        auto const& fc = fr_as_crse ? flux_crse[dir].array(mfi) : amrex::Array4<amrex::Real>();
+
+                        const int i_low  = valid_bx.smallEnd(dir);
+                        const int i_high = valid_bx.bigEnd(dir) + 1;
+
+                        amrex::ParallelFor(nbx,
+                        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
                         {
-                            if (dir == 0)
-                            {
-                                left_is_fine  = mask(i-1,j,k);
-                                right_is_fine = mask(i  ,j,k);
-                            }
-                            else
-                            {
-                                left_is_fine  = mask(i,j-1,k);
-                                right_is_fine = mask(i,j  ,k);
-                            }
-                        }
+                            int face_idx = (dir == 0) ? i : (dir == 1) ? j : k;
 
-                        for (int n = 0; n < ncomp; ++n)
-                        {
-                            //--------------------------------------------------
-                            // COARSE REGISTER
-                            //--------------------------------------------------
+                            int left_is_fine  = 0;
+                            int right_is_fine = 0;
+
                             if (fr_as_crse)
                             {
-                                if (left_is_fine == 0 && right_is_fine == 1)
+                                if (dir == 0)
                                 {
-                                    // Coarse cell is LEFT
-                                    fc(i,j,k,n) = Dm(i,j,k,n);
+                                    left_is_fine  = mask(i-1,j,k);
+                                    right_is_fine = mask(i  ,j,k);
                                 }
-                                else if (left_is_fine == 1 && right_is_fine == 0)
+                                else
                                 {
-                                    // Coarse cell is RIGHT
-                                    fc(i,j,k,n) = Dp(i,j,k,n);
+                                    left_is_fine  = mask(i,j-1,k);
+                                    right_is_fine = mask(i,j  ,k);
                                 }
                             }
 
-                            //--------------------------------------------------
-                            // FINE REGISTER
-                            //--------------------------------------------------
-                            if (fr_as_fine)
+                            for (int n = 0; n < ncomp; ++n)
                             {
-                                if (face_idx == i_low)
+                                //--------------------------------------------------
+                                // COARSE REGISTER
+                                //--------------------------------------------------
+                                if (fr_as_crse)
                                 {
-                                    // Fine cell is RIGHT
-                                    ff(i,j,k,n) = Dp(i,j,k,n);
+                                    if (left_is_fine == 0 && right_is_fine == 1)
+                                    {
+                                        // Coarse cell is LEFT
+                                        fc(i,j,k,n) = Dm(i,j,k,n);
+                                    }
+                                    else if (left_is_fine == 1 && right_is_fine == 0)
+                                    {
+                                        // Coarse cell is RIGHT
+                                        fc(i,j,k,n) = Dp(i,j,k,n);
+                                    }
                                 }
-                                else if (face_idx == i_high)
+
+                                //--------------------------------------------------
+                                // FINE REGISTER
+                                //--------------------------------------------------
+                                if (fr_as_fine)
                                 {
-                                    // Fine cell is LEFT
-                                    ff(i,j,k,n) = Dm(i,j,k,n);
+                                    if (face_idx == i_low)
+                                    {
+                                        // Fine cell is RIGHT
+                                        ff(i,j,k,n) = Dp(i,j,k,n);
+                                    }
+                                    else if (face_idx == i_high)
+                                    {
+                                        // Fine cell is LEFT
+                                        ff(i,j,k,n) = Dm(i,j,k,n);
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    }
+                }
+            }
+
+            // Send mapped boundary fluxes to AMReX FluxRegisters
+            if (fr_as_crse)
+            {
+                for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
+                {
+                    const amrex::Real dA = (idim == 0) ? dy : dx;
+                    const amrex::Real scale = -dt*dA;
+                    fr_as_crse->CrseInit(flux_crse[idim], idim, 0, 0, U_n.nComp(), scale,
+                                        amrex::FluxRegister::ADD);
+                }
+            }
+
+            if (fr_as_fine)
+            {
+                for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
+                {
+                    const amrex::Real dA = (idim == 0) ? dy : dx;
+                    const amrex::Real scale = dt*dA;
+                    fr_as_fine->FineAdd(flux_fine[idim], idim, 0, 0, U_n.nComp(), scale);
                 }
             }
         }
-
-        // Send mapped boundary fluxes to AMReX FluxRegisters
-        if (fr_as_crse)
-        {
-            for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
-            {
-                const amrex::Real dA = (idim == 0) ? dy : dx;
-                const amrex::Real scale = -dt*dA;
-                fr_as_crse->CrseInit(flux_crse[idim], idim, 0, 0, U_n.nComp(), scale,
-                                     amrex::FluxRegister::ADD);
-            }
-        }
-
-        if (fr_as_fine)
-        {
-            for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
-            {
-                const amrex::Real dA = (idim == 0) ? dy : dx;
-                const amrex::Real scale = dt*dA;
-                fr_as_fine->FineAdd(flux_fine[idim], idim, 0, 0, U_n.nComp(), scale);
-            }
-        }
-    }
+    }*/
 }

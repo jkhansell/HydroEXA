@@ -90,6 +90,10 @@ class AmrMeshState : public amrex::AmrCore {
         void WritePlotfile(int iteration, amrex::Real time);
         void WriteCheckpoint();
 
+        // Mass diagnostics / conservation tracking
+        void ComputeMassDiagnostics(amrex::Real time, int iteration);
+        void StoreInitialMassMomentum();
+
         virtual void PostProcessBaseGrids(amrex::BoxArray& box_array) const override;
 
 
@@ -136,8 +140,6 @@ class AmrMeshState : public amrex::AmrCore {
         mutable std::vector<int> boundary_boxes;
         
         // Boundary conditions
-        amrex::BCRec phys_bc;                     // Physical BC types (0-5: Interior/Inflow/Outflow/Symmetry/SlipWall/NoSlipWall)
-        amrex::BCRec terrain_bc;                  // Physical BC types (0-5: Interior/Inflow/Outflow/Symmetry/SlipWall/NoSlipWall)
         amrex::Vector<amrex::BCRec> U_bcs;        // Per-component mathematical BCRecs
         amrex::Vector<amrex::BCRec> Terrain_bcs;  // Per-component mathematical BCRecs
 
@@ -163,7 +165,14 @@ class AmrMeshState : public amrex::AmrCore {
         AMRParameters     amr_p;
         PhysicsParameters physics_p;
 
-        SolverVariant solver; 
+        SolverVariant solver;
+
+        // Conservation error tracking (stored at t=0, compared in ComputeMassDiagnostics)
+        amrex::Real initial_mass{0.0};
+        amrex::Real initial_mom_x{0.0};
+        amrex::Real initial_mom_y{0.0};
+        amrex::Real initial_ke{0.0};
+        bool initial_mass_stored{false};
 };
 
 #endif

@@ -8,8 +8,8 @@ AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 void roeSolver(
     amrex::Real hi, amrex::Real hui, amrex::Real hvi, amrex::Real zi, amrex::Real ni,
     amrex::Real hj, amrex::Real huj, amrex::Real hvj, amrex::Real zj, amrex::Real nj,
-    amrex::Real D_minus[3],       // Array to return F - S_minus (for left cell i)
-    amrex::Real D_plus[3],        // Array to return F + S_plus  (for right cell j)
+    amrex::Real D_minus[3],       // Array to return F - S_minus (for right cell j)
+    amrex::Real D_plus[3],        // Array to return F + S_plus  (for left cell i)
     const amrex::Real dt,
     const amrex::Real dx,
     const amrex::Real nx,
@@ -49,8 +49,8 @@ void roeSolver(
     amrex::Real lambda0 = utilde - ctilde;
     amrex::Real lambda1 = utilde;
     amrex::Real lambda2 = utilde + ctilde;
-	
-    // --- entropy fix ---
+
+    // --- entropy fix Harten Hyman---
     {
         amrex::Real ei = uhati - std::sqrt(PhysConstants::GRAV() * hi);
         amrex::Real ej = uhatj - std::sqrt(PhysConstants::GRAV() * hj);
@@ -109,8 +109,7 @@ void roeSolver(
         amrex::Real ntilde = 0.5 * (ni + nj);
 
         amrex::Real sf = (ntilde * ntilde *
-                    std::sqrt(utilde * utilde + vtilde * vtilde) *
-                    utilde) /
+                    std::sqrt(utilde * utilde + vtilde * vtilde) * utilde) /
                     std::max(Tolerances::TOLDRY(), htilde * std::cbrt(htilde));
 
         tau = PhysConstants::GRAV() * htilde * sf * dx;
@@ -185,7 +184,8 @@ void roeSolver(
         amrex::Real e2 = (k == 0) ? vtilde  : (k == 1 ? ctilde  : vtilde);
 
         amrex::Real flux = 0.5 * std::abs(lambda_k) * alpha_k;
-		
+
+        
         F[0] -= flux * e0; 
         F[1] -= flux * e1; 
         F[2] -= flux * e2;

@@ -80,11 +80,16 @@ protected:
 
 private:
     Checkpointer checkpointer;
-    std::unique_ptr<PlotfileWriter> plotfile_writer;
     std::string chk_file{"chk"};
+    std::string plotfile_prefix{"plt"};
+    std::string plotfile_writer_type{"native"}; // "native" or "hdf5"
 
 public:
     void SetCheckpointFile(const std::string& chk) { chk_file = chk; }
+
+    void SetPlotfilePrefix(const std::string& prefix) { plotfile_prefix = prefix; }
+
+    void SetPlotfileWriterType(const std::string& type) { plotfile_writer_type = type; }
 };
 
 #endif

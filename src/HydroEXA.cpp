@@ -83,6 +83,8 @@ void HydroEXA::Initialize() {
     BL_PROFILE("HydroEXA::Initialize");
 
     IO = std::make_shared<IOHandler>(io_params.input_file);
+    IO->SetPlotfilePrefix(io_params.plot_file);
+    IO->SetPlotfileWriterType(io_params.plot_type);
     HDF5SpatialMetadata metadata;
 
     IO->ReadHDF5Metadata("terrain", metadata);

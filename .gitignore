@@ -1,38 +1,819 @@
-CMakeLists.txt.user
-CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
+# ============================================================
+# CMake / Build
+# ============================================================
+
+make
 Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-CTestTestfile.cmake
-_deps
-CMakeUserPresets.json
-plt*
-# Match any build directory at any depth (e.g., build/, cmake-build-debug/, build-release/)
+Makefile.*
+_deps/
 **/[Bb]uild*/
 **/cmake-build-*/
-
-# Match any install directory at any depth
 **/[Ii]nstall*/
-**/[Bb]acktrace.0
+
+**/*.gif
+
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+CTestTestfile.cmake
+CTestCostData.txt
+compile_commands.json
+*.cmake.user
+CMakeUserPresets.json
+
+# Generated configuration / build metadata
+*.ninja
+.ninja_deps
+.ninja_log
+build.ninja
+rules.ninja
+install_manifest.txt
+
+# ============================================================
+# Compilers / Linkers / Object Files
+# ============================================================
+
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+*.d
+*.gch
+*.pch
+*.idb
+*.pdb
+*.ilk
+*.exp
+
+# Fortran
+*.mod
+*.smod
+*.smod.mod
+
+# CUDA
+*.cubin
+*.fatbin
+*.ptx
+*.nv_fatbin
+*.nvlink
+*.cu.o
+*.cudafe*
+*.fatbin.c
+*.module_id
+
+# HIP / ROCm
+*.hsaco
+*.hip.o
+*.hip.cpp
+
+# ============================================================
+# Python
+# ============================================================
+
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Native extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg
+*.egg-info/
+.eggs/
+
+# Python packaging
+pip-wheel-metadata/
+MANIFEST
+MANIFEST.in
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.ENV/
+virtualenv/
+.virtualenv/
+python-env/
+
+# Conda
+.conda/
+conda-env/
+.envs/
+
+# Poetry
+poetry.lock
+
+# Pipenv
+Pipfile.lock
+
+# PyInstaller
+*.spec
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# Type checking
+.mypy_cache/
+.pyre/
+.pytype/
+.pyright/
+
+# Ruff
+.ruff_cache/
+
+# Pylint
+.pylint.d/
+
+# Hypothesis
+.hypothesis/
+
+# IPython / Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+.profile_default/
+
+# Jupyter generated files
+jupyter-*.json
+
+# ============================================================
+# Python Project / Local Configuration
+# ============================================================
+
+.env
+.env.*
+!.env.example
+!.env.template
+
+*.local
+*.local.*
+local/
+.local/
+
+# User-specific configuration
+config.local.*
+settings.local.*
+*_local.py
+
+# ============================================================
+# Python Cache / Runtime
+# ============================================================
+
+*.log
+*.pid
+*.pid.lock
+*.seed
+*.state
+*.cache
+.cache/
+
+# ============================================================
+# Data / Scientific Computing
+# ============================================================
+
+# HDF5
+*.h5
+*.hdf5
+*.he5
+
+# NetCDF
+*.nc
+*.nc4
+*.cdf
+
+# NumPy
+*.npy
+*.npz
+
+# Scientific data
+*.mat
+*.rds
+*.rda
+*.sav
+
+# Parquet / Arrow
+*.parquet
+*.feather
+*.arrow
+
+# Zarr
+*.zarr/
+*.zarr.zip
+
+# GeoTIFF / Raster
+*.tif
+*.tiff
+*.vrt
+*.img
+*.bil
+*.hdr
+*.asc
+
+# Geospatial vector data
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.qix
+*.sbn
+*.sbx
+*.gpkg
+
+# Large scientific / binary files
+*.bin
+*.dat
+*.raw
+*.dump
+*.dmp
+
+# ============================================================
+# Project-Specific Generated Data
+# ============================================================
+
+data/
+datasets/
+dataset/
+outputs/
+output/
+results/
+result/
+artifacts/
+artifact/
+generated/
+generated_data/
+processed/
+processed_data/
+tmp/
+temp/
+scratch/
+
+**/data/
+**/datasets/
+**/outputs/
+**/results/
+**/artifacts/
+**/generated/
+**/processed/
+
+# ============================================================
+# Logs
+# ============================================================
+
+logs/
+**/logs/
+*.log
+*.err
+*.error
+*.out
+*.stdout
+*.stderr
+
 **/[Ee]rr.log
 **/[Ll]og.log
-**/*.h5
+**/[Bb]acktrace.0
+
+# ============================================================
+# HPC / Cluster
+# ============================================================
+
+# Slurm
+slurm-*.out
+slurm-*.err
+*.slurm
+*.sbatch
+
+# PBS / Torque
+*.pbs
+*.torque
+*.o[0-9]*
+*.e[0-9]*
+
+# LSF
+*.lsf
+
+# SGE
+*.o
+*.e
+
+# MPI / profiling output
+*.prof
+*.profile
+*.prv
+*.row
+*.pcf
+*.vfd
+*.otf2
+*.slog2
+
+# NVIDIA Nsight
+*.qdstrm
+*.sqlite
+*.nsys-rep
+*.qdrep
+
+# NVIDIA Compute Sanitizer
+compute-sanitizer.log
+
+# Valgrind
+valgrind-out-*
+vgcore.*
+
+# gprof
+gmon.out
+
+# perf
+perf.data
+perf.data.old
+
+# ============================================================
+# Profiling / Performance
+# ============================================================
+
+*.json.gz
+*.trace
+*.trc
+*.timeline
+*.profile.json
+
+# HPCToolkit
+hpctoolkit-*/
+hpctoolkit-*.hpctoolkit/
+
+# Score-P
+scorep-*/
+scorep-*.cubex
+scorep-*.otf2
+
+# TAU
+profile.*
+MULTI__*
+
+# Intel VTune
+*.vtune
+r@@*
+
+# ============================================================
+# Test Outputs
+# ============================================================
+
 tests/**/*.png
 tests/**/*.h5
-**/logs
-logs
-.claude
-.mcp.json
-.codegraph
-**/tests/*.png
+tests/**/*.hdf5
+tests/**/output/
+tests/**/outputs/
+tests/**/results/
+tests/**/logs/
+tests/**/*.log
+tests/**/*.dat
+tests/**/*.bin
+tests/**/*.vtk
+tests/**/*.vtu
+tests/**/*.csv
+
+# Generic test artifacts
+test-results/
+test-output/
+test_outputs/
+
+# ============================================================
+# Visualization / Plotting
+# ============================================================
+
+plt*
+plots/
+figures/
+figures/**/*.png
+figures/**/*.jpg
+figures/**/*.jpeg
+figures/**/*.pdf
+figures/**/*.svg
+
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp
+
+# Keep documentation images if desired:
+# !docs/**/*.png
+# !docs/**/*.jpg
+
+# ============================================================
+# Scientific Visualization
+# ============================================================
+
+*.vtk
+*.vti
+*.vtr
+*.vts
+*.vtp
+*.pvti
+*.pvtr
+*.pvts
+*.pvtp
+*.visit
+*.xdmf
+*.xmf
+
+# ParaView
+*.pvsm
+*.foam
+
+# ============================================================
+# IDEs / Editors
+# ============================================================
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# JetBrains / CLion
+.idea/
+*.iml
+*.iws
+*.ipr
+
 # CLion
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#cmake-build-*
-.vscode
+cmake-build-*/
+# JetBrains local history
+.localhistory/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Xcode
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/
+
+# Eclipse
+.project
+.cproject
+.settings/
+
+# Vim
+*.swp
+*.swo
+*.swn
+*.vimrc
+*~
+.netrwhist
+
+# Emacs
+.#*
+auto-save-list/
+.dir-locals.el
+
+# Nano
+.nanorc
+
+# ============================================================
+# macOS
+# ============================================================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.DocumentRevisions-V100
+.TemporaryItems
+.VolumeIcon.icns
+
+# ============================================================
+# Windows
+# ============================================================
+
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# ============================================================
+# Linux
+# ============================================================
+
+*~
+.directory
+.Trash-*
+
+# ============================================================
+# Documentation Generated Files
+# ============================================================
+
+_site/
+site/
+docs/_build/
+docs/build/
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.idx
+*.ilg
+*.ind
+*.lof
+*.lot
+*.out
+*.toc
+*.synctex.gz
+*.nav
+*.snm
+*.vrb
+
+# ============================================================
+# LaTeX
+# ============================================================
+
+*.dvi
+*.ps
+*.xdv
+
+# ============================================================
+# Ccache / Compiler Cache
+# ============================================================
+
+.ccache/
+ccache/
+*.ccache
+
+# ============================================================
+# Static Analysis / Code Quality
+# ============================================================
+
+.clangd/
+.clang-tidy-cache/
+.cache/clangd/
+compile_commands.json
+
+# Sonar
+.sonar/
+.scannerwork/
+
+# ============================================================
+# Git / Git Tools
+# ============================================================
+
+.git-credentials
+.gitmodules.local
+
+# GitHub CLI
+.gh/
+.github/*.local.yml
+
+# ============================================================
+# Claude / AI Coding Tools
+# ============================================================
+
+.claude/
+.mcp.json
+.codegraph/
+
+# Local AI/tool caches
+.ai/
+.ai-cache/
+.codex/
+.cursor/
+.cursorindex/
+.cursorrules.local
+
+# ============================================================
+# LLM / ML Framework Caches
+# ============================================================
+
+# Hugging Face
+.huggingface/
+huggingface/
+.cache/huggingface/
+.cache/huggingface/hub/
+
+# PyTorch
+.cache/torch/
+torch_extensions/
+
+# TensorFlow
+.keras/
+.keras-cache/
+
+# JAX
+.cache/jax/
+
+# Weights & Biases
+wandb/
+.wandb/
+
+# MLflow
+mlruns/
+
+# TensorBoard
+runs/
+tensorboard/
+
+# Lightning
+.lightning/
+
+# ============================================================
+# Model Files
+# ============================================================
+
+*.gguf
+*.ggml
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.tflite
+*.pb
+
+# ============================================================
+# Databases
+# ============================================================
+
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# PostgreSQL dumps
+*.sql.gz
+*.dump
+*.backup
+*.bak
+
+# ============================================================
+# Docker / Containers
+# ============================================================
+
+.docker/
+docker-data/
+docker-volumes/
+*.tar
+*.tar.gz
+
+# Apptainer / Singularity images
+*.sif
+*.img
+*.simg
+
+# Container runtime state
+apptainer-cache/
+singularity-cache/
+
+# ============================================================
+# Secrets / Credentials
+# ============================================================
+
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+
+credentials.json
+credentials.yml
+credentials.yaml
+secrets.json
+secrets.yml
+secrets.yaml
+
+# SSH local configuration
+.ssh/
+
+# ============================================================
+# OS / Temporary Files
+# ============================================================
+
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.rej
+
+*.swp
+*.swo
+*~
+
+# ============================================================
+# Archives
+# ============================================================
+
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.bz2
+*.xz
+
+# ============================================================
+# Generated Documentation / Reports
+# ============================================================
+
+reports/
+report/
+*.html
+*.docx
+*.xlsx
+
+# Keep source documentation if needed:
+# !docs/**/*.html
+
+# ============================================================
+# Scratch / Personal Workspace
+# ============================================================
+
+scratch/
+sandbox/
+work/
+workspace/
+.local/
+.local_*/
+personal/
+notes.local/
+experiments/
+experiments/**/output/
+experiments/**/results/
+
+# ============================================================
+# C++ Package Managers
+# ============================================================
+
+# Conan
+.conan/
+conan.lock
+
+# vcpkg
+vcpkg_installed/
+
+# Hunter
+_Hunter/
+
+# CPM.cmake
+.cpmcache/
+
+# ============================================================
+# Dependency Managers
+# ============================================================
+
+node_modules/
+.npm/
+.yarn/
+.pnpm-store/
+
+# ============================================================
+# Miscellaneous Generated Files
+# ============================================================
+
+*.generated
+*.generated.*
+*.gen
+*.cache
+*.lock
+*.pid
+*.seed
+*.stamp
+*.timestamp

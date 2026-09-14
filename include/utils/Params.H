@@ -10,9 +10,10 @@
 
 struct RuntimeParameters
 {
-    amrex::Real etime{0.0};       // Current physical simulation time
-    amrex::Real max_time{1.0};    // Simulation stop time (physical time)
-    int iteration{0};             // Iteration counter
+    amrex::Real etime{0.0};           // Current physical simulation time
+    amrex::Real max_time{1.0};        // Simulation stop time (physical time)
+    amrex::Real mass_diag_freq{-1.0}; // Frequency of mass diagnostics output (negative = disabled)
+    int iteration{0};                 // Iteration counter
 };
 
 struct IOParameters
@@ -23,6 +24,7 @@ struct IOParameters
     bool async_io{false};                     // Whether to use asynchronous I/O
     std::string chk_type{"native"};           // Checkpoint file format
     std::string plot_file{"plt"};             // Plotfile prefix
+    std::string plot_type{"native"};          // Plotfile writer type: "native" or "hdf5"
     std::string chk_file{"chk"};              // Checkpoint file prefix
     std::string input_file{"input.h5"};       // HDF5 file containing initial conditions (e.g., DEM)
     std::string restart_chkfile{"restart"};   // Checkpoint file to restart from (empty means no restart)
@@ -38,13 +40,11 @@ struct AMRParameters
 };
 
 // Physical BC type indices (mapped to mathematical BCType at runtime)
-// 0 = Interior (periodic/interior)    3 = Symmetry
-// 1 = Inflow                         4 = SlipWall
-// 2 = Outflow                        5 = NoSlipWall
+// 0 = Reflective Wall   1 = Transmissive
 struct BCParams
 {
-    int lo_bc[AMREX_SPACEDIM] = {5, 5};   // default: NoSlipWall
-    int hi_bc[AMREX_SPACEDIM] = {5, 5};
+    int lo_bc[AMREX_SPACEDIM] = {0, 0};   // default: NoSlipWall
+    int hi_bc[AMREX_SPACEDIM] = {0, 0};
 };
 
 struct PhysicsParameters

@@ -1,202 +1,79 @@
 #ifndef BCFILL_H
 #define BCFILL_H
 
+#include <AMReX_BCRec.H>
 #include <AMReX_FArrayBox.H>
 #include <AMReX_Geometry.H>
 #include <AMReX_PhysBCFunct.H>
-#include <AMReX_BCRec.H>
 
-// ============================================================================
-// Physical BC type indices (user-facing, read from inputs file)
-// ============================================================================
-// 0 = Interior (periodic/interior)    3 = Symmetry
-// 1 = Inflow                         4 = SlipWall
-// 2 = Outflow                        5 = NoSlipWall
+#include <utils/Params.H>
 
-// ============================================================================
-// Mathematical BC type lookup tables
-// ============================================================================
-// Maps physical BC type (index) -> mathematical BCType for each state component.
-// Components: scalar (h), normal velocity (hu in x-dir, hv in y-dir),
-//            tangential velocity (v-component in x-dir, u-component in y-dir).
 
-static int const scalar_bc[] =
+enum class ExternalBC : int
 {
-    amrex::BCType::int_dir, amrex::BCType::ext_dir, amrex::BCType::foextrap,
-    amrex::BCType::reflect_even, amrex::BCType::reflect_even, amrex::BCType::reflect_even
+    Reflective, 
+    Transmissive
 };
 
-static int const norm_vel_bc[] =
+inline int ScalarBC(int bc)
 {
-    amrex::BCType::int_dir, amrex::BCType::ext_dir, amrex::BCType::foextrap,
-    amrex::BCType::reflect_odd,  amrex::BCType::reflect_odd,  amrex::BCType::reflect_odd
-};
-
-static int const tang_vel_bc[] =
-{
-    amrex::BCType::int_dir, amrex::BCType::ext_dir, amrex::BCType::foextrap,
-    amrex::BCType::reflect_even, amrex::BCType::reflect_even, amrex::BCType::reflect_odd
-};
-
-// ============================================================================
-// Per-component BCRec construction helpers
-// ============================================================================
-
-inline
-void
-set_scalar_bc (amrex::BCRec& bc, const amrex::BCRec& phys_bc)
-{
-    auto const* lo_bc = phys_bc.lo();
-    auto const* hi_bc = phys_bc.hi();
-    for (int i = 0; i < AMREX_SPACEDIM; ++i)
-    {
-        bc.setLo(i, scalar_bc[lo_bc[i]]);
-        bc.setHi(i, scalar_bc[hi_bc[i]]);
-    }
+    return static_cast<ExternalBC>(bc) == ExternalBC::Reflective ? amrex::BCType::reflect_even : amrex::BCType::foextrap;
 }
 
-inline
-void
-set_x_vel_bc(amrex::BCRec& bc, const amrex::BCRec& phys_bc)
+inline int NormalBC(int bc)
 {
-    auto const* lo_bc = phys_bc.lo();
-    auto const* hi_bc = phys_bc.hi();
-    bc.setLo(0, norm_vel_bc[lo_bc[0]]);
-    bc.setHi(0, norm_vel_bc[hi_bc[0]]);
+    return static_cast<ExternalBC>(bc) == ExternalBC::Reflective ? amrex::BCType::reflect_odd : amrex::BCType::foextrap;
+}
+
+inline int TangentialBC(int bc)
+{
+    return static_cast<ExternalBC>(bc) == ExternalBC::Reflective ? amrex::BCType::reflect_even : amrex::BCType::foextrap;
+}
+
+inline void SetScalarBC(amrex::BCRec& bc, BCParams& bc_params)
+{
+    bc.setLo(0, ScalarBC(bc_params.lo_bc[0]));
+    bc.setHi(0, ScalarBC(bc_params.hi_bc[0]));
 #if (AMREX_SPACEDIM >= 2)
-    bc.setLo(1, tang_vel_bc[lo_bc[1]]);
-    bc.setHi(1, tang_vel_bc[hi_bc[1]]);
+    bc.setLo(1, ScalarBC(bc_params.lo_bc[1]));
+    bc.setHi(1, ScalarBC(bc_params.hi_bc[1]));
 #endif
 }
 
-inline
-void
-set_y_vel_bc(amrex::BCRec& bc, const amrex::BCRec& phys_bc)
+inline void SetXVelocityBC(amrex::BCRec& bc, BCParams& bc_params)
 {
-    auto const* lo_bc = phys_bc.lo();
-    auto const* hi_bc = phys_bc.hi();
-    bc.setLo(0, tang_vel_bc[lo_bc[0]]);
-    bc.setHi(0, tang_vel_bc[hi_bc[0]]);
+    bc.setLo(0, NormalBC(bc_params.lo_bc[0]));
+    bc.setHi(0, NormalBC(bc_params.hi_bc[0]));
 #if (AMREX_SPACEDIM >= 2)
-    bc.setLo(1, norm_vel_bc[lo_bc[1]]);
-    bc.setHi(1, norm_vel_bc[hi_bc[1]]);
+    bc.setLo(1, TangentialBC(bc_params.lo_bc[1]));
+    bc.setHi(1, TangentialBC(bc_params.hi_bc[1]));
 #endif
 }
 
-// ============================================================================
-// ext_dir fill functor
-// ============================================================================
-// Called by PhysBCFunct for ghost cells where BCType::ext_dir is set.
-// Extrapolates values from the interior boundary cell.
+inline void SetYVelocityBC(amrex::BCRec& bc, BCParams& bc_params)
+{
+    bc.setLo(0, TangentialBC(bc_params.lo_bc[0]));
+    bc.setHi(0, TangentialBC(bc_params.hi_bc[0]));
+#if (AMREX_SPACEDIM >= 2)
+    bc.setLo(1, NormalBC(bc_params.lo_bc[1]));
+    bc.setHi(1, NormalBC(bc_params.hi_bc[1]));
+#endif
+}
 
-struct HydroEXAFill
+struct ExternalBCFill
 {
     AMREX_GPU_DEVICE
-    void operator()(
-        const amrex::IntVect& iv,
-        amrex::Array4<amrex::Real> const& dest,
-        const int dcomp,
-        const int numcomp,
-        amrex::GeometryData const& geom,
-        const amrex::Real /*time*/,
-        const amrex::BCRec* bcr,
-        const int bcomp,
-        const int /*orig_comp*/) const
+    void operator()(const amrex::IntVect& iv,
+                    amrex::Array4<amrex::Real> const& a,
+                    int dcomp, int ncomp,
+                    amrex::GeometryData const& geom,
+                    amrex::Real,
+                    const amrex::BCRec* bcr,
+                    int bcomp, int) const
     {
-        const amrex::Box& domain = geom.Domain();
-        const int i = iv[0];
-        const int j = iv[1];
 
-        // --------------------------------------------------------------------
-        // X-LOW Domain Boundary (i < domain.smallEnd(0))
-        // --------------------------------------------------------------------
-        if (i < domain.smallEnd(0)) {
-            int ilast = domain.smallEnd(0);
-            for (int n = 0; n < numcomp; ++n) {
-                int bc = bcr[bcomp + n].lo(0);
-                
-                if (bc == amrex::BCType::foextrap) {
-                    // Outflow / Zero-Gradient Extrapolation
-                    dest(i, j, 0, dcomp + n) = dest(ilast, j, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_even) {
-                    // Reflective Wall (Symmetric)
-                    int i_sym = 2 * ilast - 1 - i;
-                    dest(i, j, 0, dcomp + n) = dest(i_sym, j, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_odd) {
-                    // Reflective Wall (Anti-symmetric for normal momentum hu)
-                    int i_sym = 2 * ilast - 1 - i;
-                    dest(i, j, 0, dcomp + n) = -dest(i_sym, j, 0, dcomp + n);
-                }
-            }
-        }
-
-        // --------------------------------------------------------------------
-        // X-HIGH Domain Boundary (i > domain.bigEnd(0))
-        // --------------------------------------------------------------------
-        if (i > domain.bigEnd(0)) {
-            int ilast = domain.bigEnd(0);
-            for (int n = 0; n < numcomp; ++n) {
-                int bc = bcr[bcomp + n].hi(0);
-
-                if (bc == amrex::BCType::foextrap) {
-                    dest(i, j, 0, dcomp + n) = dest(ilast, j, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_even) {
-                    int i_sym = 2 * ilast + 1 - i;
-                    dest(i, j, 0, dcomp + n) = dest(i_sym, j, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_odd) {
-                    int i_sym = 2 * ilast + 1 - i;
-                    dest(i, j, 0, dcomp + n) = -dest(i_sym, j, 0, dcomp + n);
-                }
-            }
-        }
-
-        // --------------------------------------------------------------------
-        // Y-LOW Domain Boundary (j < domain.smallEnd(1))
-        // --------------------------------------------------------------------
-        if (j < domain.smallEnd(1)) {
-            int jlast = domain.smallEnd(1);
-            for (int n = 0; n < numcomp; ++n) {
-                int bc = bcr[bcomp + n].lo(1);
-
-                if (bc == amrex::BCType::foextrap) {
-                    dest(i, j, 0, dcomp + n) = dest(i, jlast, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_even) {
-                    int j_sym = 2 * jlast - 1 - j;
-                    dest(i, j, 0, dcomp + n) = dest(i, j_sym, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_odd) {
-                    int j_sym = 2 * jlast - 1 - j;
-                    dest(i, j, 0, dcomp + n) = -dest(i, j_sym, 0, dcomp + n);
-                }
-            }
-        }
-
-        // --------------------------------------------------------------------
-        // Y-HIGH Domain Boundary (j > domain.bigEnd(1))
-        // --------------------------------------------------------------------
-        if (j > domain.bigEnd(1)) {
-            int jlast = domain.bigEnd(1);
-            for (int n = 0; n < numcomp; ++n) {
-                int bc = bcr[bcomp + n].hi(1);
-
-                if (bc == amrex::BCType::foextrap) {
-                    dest(i, j, 0, dcomp + n) = dest(i, jlast, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_even) {
-                    int j_sym = 2 * jlast + 1 - j;
-                    dest(i, j, 0, dcomp + n) = dest(i, j_sym, 0, dcomp + n);
-                } 
-                else if (bc == amrex::BCType::reflect_odd) {
-                    int j_sym = 2 * jlast + 1 - j;
-                    dest(i, j, 0, dcomp + n) = -dest(i, j_sym, 0, dcomp + n);
-                }
-            }
-        }
     }
 };
+
+
 #endif
