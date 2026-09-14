@@ -38,7 +38,6 @@ set_machine_env() {
                 -DCMAKE_CUDA_ARCHITECTURES=80
                 -DAMReX_GPU_BACKEND=CUDA
                 -DAMReX_CUDA_ARCH=8.0
-                -DAMReX_GPU_RDC=ON
             "
             ;;
 
@@ -50,8 +49,6 @@ set_machine_env() {
             GPU_FLAGS="
                 -DCMAKE_CUDA_ARCHITECTURES=70
                 -DAMReX_GPU_BACKEND=CUDA
-                -DAMReX_CUDA_ARCH=7.0
-                -DAMReX_GPU_RDC=ON
             "
             ;;
 
@@ -62,9 +59,8 @@ set_machine_env() {
 
             GPU_FLAGS="
                 -DCMAKE_CUDA_ARCHITECTURES=89
+                -DCMAKE_CUDA_COMPILER=nvcc
                 -DAMReX_GPU_BACKEND=CUDA
-                -DAMReX_CUDA_ARCH=8.9
-                -DAMReX_GPU_RDC=ON
             "
             ;;
 

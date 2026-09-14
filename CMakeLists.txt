@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
+
 project(HydroEXA CXX C)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Configure AMReX settings (for internal fallback build)
@@ -29,10 +30,10 @@ find_package(MPI REQUIRED)
 
 if (DEFINED AMReX_ROOT)
   message(STATUS "Using external AMReX from ${AMReX_ROOT}")
-  
+
   # Determine Backend directly from explicit configuration flag passed by shell
   if(HYDROEXA_GPU_BACKEND MATCHES ".*\\.gpu")
-    
+
     if(HYDROEXA_GPU_BACKEND MATCHES "frontier.*")
       message(STATUS "Pre-detecting HIP environment...")
       enable_language(HIP)
@@ -54,6 +55,7 @@ else()
   add_subdirectory(tpl/amrex)
 endif()
 
+
 # ============================================================
 # Load HDF5 (Required for IOHandler and input parsing)
 # ============================================================
@@ -67,6 +69,8 @@ set(HYDROEXA_SOURCES
     src/HydroEXA.cpp
     src/io/IOHandler.cpp
     src/io/Checkpointer.cpp
+    src/io/NativePlotFile.cpp
+    src/io/HDF5PlotFile.cpp
     src/state/AmrMeshState_Init.cpp
     src/state/AmrMeshState_AMR.cpp
     src/state/AmrMeshState_Physics.cpp
@@ -90,18 +94,46 @@ if (HDF5_IS_PARALLEL)
 endif()
 
 # ============================================================
-# GPU backend compilation flags (no language override)
+# GPU backend compilation
 # ============================================================
-# Do NOT force LANGUAGE CUDA/HIP on HydroEXA sources — nvcc's C++
-# parser cannot handle C++20 features (std::numbers, std::ssize)
-# used in AMReX headers.  Let g++/clang++ compile the sources and
-# rely on AMReX's own CUDA/HIP compilation rules for its objects.
 
-if(AMReX_GPU_BACKEND STREQUAL "CUDA" OR HYDROEXA_GPU_BACKEND MATCHES "kabre.*|juwelsbooster.*|local.*")
-    message(STATUS "CUDA backend detected — linking against AMReX CUDA targets.")
-    set_target_properties(HydroEXA PROPERTIES CUDA_STANDARD 17)
+if(AMReX_GPU_BACKEND STREQUAL "CUDA")
 
-elseif(AMReX_GPU_BACKEND STREQUAL "HIP" OR HYDROEXA_GPU_BACKEND MATCHES "frontier.*")
-    message(STATUS "HIP backend detected — linking against AMReX HIP targets.")
-    set_target_properties(HydroEXA PROPERTIES HIP_STANDARD 17)
+    message(STATUS "CUDA backend detected.")
+
+    enable_language(CUDA)
+
+    set_target_properties(HydroEXA PROPERTIES
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON 
+        CUDA_SEPARABLE_COMPILATION ON #
+    )
+
+    set_source_files_properties(
+        ${HYDROEXA_SOURCES}
+        PROPERTIES
+        LANGUAGE CUDA
+    )
+
+elseif(AMReX_GPU_BACKEND STREQUAL "HIP")
+
+    message(STATUS "HIP backend detected.")
+
+    enable_language(HIP)
+
+    set_target_properties(HydroEXA PROPERTIES
+        HIP_STANDARD 17
+        HIP_STANDARD_REQUIRED ON
+    )
+
+    set_source_files_properties(
+        ${HYDROEXA_SOURCES}
+        PROPERTIES
+        LANGUAGE HIP
+    )
+
+elseif(AMReX_GPU_BACKEND STREQUAL "SYCL")
+
+    message(STATUS "SYCL backend detected.")
+
 endif()
