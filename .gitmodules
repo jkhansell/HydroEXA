@@ -1,3 +1,7 @@
 [submodule "tpl/amrex"]
 	path = tpl/amrex
 	url = https://github.com/AMReX-Codes/amrex.git
+[submodule "tpl/hdf5"]
+	path = tpl/hdf5
+	url = https://github.com/HDFGroup/hdf5.git
+	branch = hdf5_1.14.4

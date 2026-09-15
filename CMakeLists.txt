@@ -7,7 +7,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Configure AMReX settings (for internal fallback build)
 set(AMReX_SPACEDIM 2 CACHE STRING "Spatial Dimension")
-set(AMReX_MPI ON CACHE BOOL "Enable MPI")
+
+# Only enable MPI if a compiler wrapper (mpicc) is available;
+# otherwise fall back to a serial build for local development.
+if(NOT DEFINED AMReX_MPI)
+  find_program(_MPICC_FOUND mpicc)
+  set(AMReX_MPI ${_MPICC_FOUND} CACHE BOOL "Enable MPI" FORCE)
+  mark_as_advanced(_MPICC_FOUND)
+  if(AMReX_MPI)
+    message(STATUS "MPI found via mpicc — enabling AMReX_MPI")
+  else()
+    message(STATUS "mpicc not found — building without MPI (local/dev mode)")
+  endif()
+endif()
 
 
 find_program(CCACHE_PROGRAM ccache)
@@ -20,8 +32,13 @@ else()
 endif()
 
 
-# Load MPI
-find_package(MPI REQUIRED)
+# Load MPI (only when AMReX_MPI is enabled)
+if(AMReX_MPI)
+  find_package(MPI REQUIRED)
+  message(STATUS "MPI found: ${MPI_C_VERSION}")
+else()
+  message(STATUS "MPI disabled — proceeding without it")
+endif()
 
 
 # ============================================================
@@ -58,82 +75,26 @@ endif()
 
 # ============================================================
 # Load HDF5 (Required for IOHandler and input parsing)
+# Prefer local TPL build, fall back to system install
 # ============================================================
+if(DEFINED HDF5_ROOT)
+  message(STATUS "Using external HDF5 from ${HDF5_ROOT}")
+else()
+  set(HDF5_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tpl/hdf5/install" CACHE PATH "HDF5 install prefix")
+  message(STATUS "HDF5 not specified, defaulting to TPL: ${HDF5_ROOT}")
+endif()
 find_package(HDF5 REQUIRED COMPONENTS C)
-# ============================================================
-# Target Configuration
-# ============================================================
-
-set(HYDROEXA_SOURCES
-    src/HydroEXADriver.cpp
-    src/HydroEXA.cpp
-    src/io/IOHandler.cpp
-    src/io/Checkpointer.cpp
-    src/io/NativePlotFile.cpp
-    src/io/HDF5PlotFile.cpp
-    src/state/AmrMeshState_Init.cpp
-    src/state/AmrMeshState_AMR.cpp
-    src/state/AmrMeshState_Physics.cpp
-    src/state/AmrMeshState_Utils.cpp
-    src/solvers/Roe.cpp
-    src/utils/MaskedAverageDown.cpp
-)
-
-add_executable(HydroEXA ${HYDROEXA_SOURCES})
-
-target_include_directories(HydroEXA PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(HydroEXA PUBLIC AMReX::amrex ${HDF5_LIBRARIES} MPI::MPI_CXX MPI::MPI_C)
-
-if(HYDROEXA_GPU_BACKEND MATCHES "kabre.*") 
-  # Add this right below target_link_libraries:
-  target_link_options(HydroEXA PRIVATE "-Wl,--no-as-needed" "-lmpi")
-endif()
-
-if (HDF5_IS_PARALLEL)
-  target_compile_definitions(HydroEXA PRIVATE H5_HAVE_PARALLEL)
-endif()
 
 # ============================================================
-# GPU backend compilation
+# Enable GPU language now that AMReX has set AMReX_GPU_BACKEND
 # ============================================================
-
 if(AMReX_GPU_BACKEND STREQUAL "CUDA")
-
-    message(STATUS "CUDA backend detected.")
-
     enable_language(CUDA)
-
-    set_target_properties(HydroEXA PROPERTIES
-        CUDA_STANDARD 17
-        CUDA_STANDARD_REQUIRED ON 
-        CUDA_SEPARABLE_COMPILATION ON #
-    )
-
-    set_source_files_properties(
-        ${HYDROEXA_SOURCES}
-        PROPERTIES
-        LANGUAGE CUDA
-    )
-
 elseif(AMReX_GPU_BACKEND STREQUAL "HIP")
-
-    message(STATUS "HIP backend detected.")
-
     enable_language(HIP)
-
-    set_target_properties(HydroEXA PROPERTIES
-        HIP_STANDARD 17
-        HIP_STANDARD_REQUIRED ON
-    )
-
-    set_source_files_properties(
-        ${HYDROEXA_SOURCES}
-        PROPERTIES
-        LANGUAGE HIP
-    )
-
-elseif(AMReX_GPU_BACKEND STREQUAL "SYCL")
-
-    message(STATUS "SYCL backend detected.")
-
 endif()
+
+# ============================================================
+# Build from src/ subdirectory structure
+# ============================================================
+add_subdirectory(src)

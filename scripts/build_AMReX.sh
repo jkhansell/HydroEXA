@@ -1,101 +1,63 @@
 #!/bin/bash
-
 # ============================================================
-# Import Machine Environment Function
+# build_AMReX.sh — Build AMReX from source
+# ============================================================
+# Sourced by build_HydroEXA.sh. Requires lib.sh to be loaded first.
 # ============================================================
 
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-
-if [ -f "${SCRIPT_DIR}/print_banner.sh" ]; then
-    source "${SCRIPT_DIR}/print_banner.sh"
-fi
-
-if [ -f "${SCRIPT_DIR}/machine_selection.sh" ]; then
-    source "${SCRIPT_DIR}/machine_selection.sh"
-else
-    print_banner "${RED}" "Missing machine selection file!"
-    echo "Could not find machine_selection.sh next to this script."
+# --- Guard: must be sourced, not executed ---
+if [[ "${LIB_LOADED:-}" != "1" ]]; then
+    echo "Error: build_AMReX.sh must be sourced via build_HydroEXA.sh" >&2
     exit 1
 fi
-
-# ============================================================
-# Input
-# ============================================================
-
-if [ $# -ne 2 ]; then
-    print_banner "${RED}" "Invalid target"
-    echo "Usage:"
-    echo "  $0 [frontier.gpu|frontier.cpu|juwelsbooster.gpu|juwelsbooster.cpu|local.gpu|local.cpu]"
-    exit 1
-fi
-
-TARGET=$1
-BUILD_TYPE=$2
-
-# ============================================================
-# Directories
-# ============================================================
-
-export HYDROEXA_DIR=$(git rev-parse --show-toplevel)
-export AMREX_DIR="${HYDROEXA_DIR}/tpl/amrex"
 
 build_dir="${AMREX_DIR}/build/"
 install_dir="${AMREX_DIR}/install/"
-
 amrex_config="${install_dir}/lib/cmake/AMReX/AMReXConfig.cmake"
 
-# ============================================================
-# Machine-specific configuration (Imported Function)
-# ============================================================
-
-if ! set_machine_env "${TARGET}"; then
-    print_banner "${RED}" "Unknown target: ${TARGET}"
-    exit 1
-fi
-
-# ============================================================
-# Skip rebuild if already installed
-# ============================================================
-
+# ---------------------------------------------------------------------------
+# Skip if already installed
+# ---------------------------------------------------------------------------
 if [ -f "${amrex_config}" ]; then
     print_banner "${GREEN}" "AMReX already installed for ${TARGET}"
-    exit 0
+    export AMREX_ROOT="${install_dir}/lib/cmake/AMReX"
+    return 0 2>/dev/null
 fi
 
 print_banner "${BLUE}" "Building AMReX for ${TARGET}"
 
-# ============================================================
-# Configure
-# ============================================================
-
+# --- Configure ---
 print_banner "${BLUE}" "Configuring"
 
+# Only enable MPI if an MPI wrapper (mpicc) is available on PATH.
+if command -v mpicc &>/dev/null; then
+    print_banner "${BLUE}" "MPI wrapper found — enabling AMReX_MPI"
+else
+    print_banner "${RED}" "No MPI wrapper — building AMReX without MPI (local/dev mode)"
+fi
+
 cmake -S ${AMREX_DIR} -B ${build_dir}          \
-    -DAMReX_MPI=ON                             \
+    -DAMReX_MPI=OFF                            \
     -DAMReX_OMP=OFF                            \
     -DAMReX_PARTICLES=ON                       \
     -DAMReX_SPACEDIM=2                         \
     -DAMReX_LINEAR_SOLVERS=ON                  \
-    -DAMReX_PRECISION=DOUBLE                   \
+    -DAMReX_PRECISION=${PRECISION}             \
+    -DAMReX_HDF5=ON                            \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"         \
     -DCMAKE_INSTALL_PREFIX=${install_dir}      \
     -DCMAKE_CXX_COMPILER=${CXX}                \
+    -DHDF5_ROOT=${HDF5_ROOT}                   \
     ${GPU_FLAGS}
 
-# ============================================================
-# Build
-# ============================================================
-
+# --- Build ---
 print_banner "${BLUE}" "Building"
-
 cmake --build ${build_dir} -j 16
 
-# ============================================================
-# Install
-# ============================================================
-
+# --- Install ---
 print_banner "${BLUE}" "Installing"
-
 cmake --install ${build_dir}
+
+export AMREX_ROOT="${install_dir}/lib/cmake/AMReX"
 
 print_banner "${GREEN}" "AMReX build completed"
