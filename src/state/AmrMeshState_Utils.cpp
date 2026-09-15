@@ -15,14 +15,25 @@ void AmrMeshState::GetData(int lev, amrex::Real time, amrex::Vector<amrex::Multi
     data.clear();
     datatime.clear();
 
-    // Always return both states so FillPatch can interpolate correctly.
-    // This is robust against any internal swaps of U_old / U_new because
-    // the timestamps t_old / t_new always describe the logical time of the
-    // old and new states respectively, regardless of which MultiFab holds them.
-    data.push_back(&U_old[lev]);
-    data.push_back(&U_new[lev]);
-    datatime.push_back(t_old[lev]);
-    datatime.push_back(t_new[lev]);
+    const amrex::Real teps = (t_new[lev] - t_old[lev]) * 1.e-3;
+
+    if (time > t_new[lev] - teps && time < t_new[lev] + teps)
+    {
+        data.push_back(&U_new[lev]);
+        datatime.push_back(t_new[lev]);
+    }
+    else if (time > t_old[lev] - teps && time < t_old[lev] + teps)
+    {
+        data.push_back(&U_old[lev]);
+        datatime.push_back(t_old[lev]);
+    }
+    else
+    {
+        data.push_back(&U_old[lev]);
+        data.push_back(&U_new[lev]);
+        datatime.push_back(t_old[lev]);
+        datatime.push_back(t_new[lev]);
+    }
 }
 
 void AmrMeshState::WritePlotfile(int iteration, amrex::Real time) {
@@ -97,6 +108,17 @@ SolverContext AmrMeshState::GetSolverContext()
             int ncomp)
         {
             FillPatch(lev,time,mf,bc,icomp,ncomp);
+        },
+
+        [this](
+            int lev,
+            amrex::Real time,
+            amrex::MultiFab& mf,
+            const amrex::Vector<amrex::BCRec>& bc,
+            int icomp,
+            int ncomp)
+        {
+            FillPatchTerrain(lev,time,mf,bc,icomp,ncomp);
         },
 
         [](const amrex::MultiFab& mf,

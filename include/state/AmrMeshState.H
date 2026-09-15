@@ -107,6 +107,9 @@ class AmrMeshState : public amrex::AmrCore {
     private:
         // Internal helper functions for level management
         void FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
+        void FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
+        
+        void FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
         void FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
     
         void AverageDown (amrex::Vector<amrex::MultiFab>& arr);

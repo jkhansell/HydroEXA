@@ -261,10 +261,10 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
         flux_reg[lev] = nullptr;
     }
 
+    FillCoarsePatchTerrain(lev, time, DynamicTerrain[lev], 0, ncomp_Terrain);
     FillCoarsePatch(lev, time, U_new[lev], U_bcs, 0, ncomp_U);
 
 }
-
 
 void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm) {
     
@@ -369,6 +369,26 @@ void AmrMeshState::FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& 
     amrex::Vector<amrex::MultiFab*> cmf;
     amrex::Vector<amrex::Real> ctime;
     GetData(lev-1, time, cmf, ctime);
+
+    if (cmf.size() != 1) {
+        amrex::Abort("FillCoarsePatch: how did this happen?");
+    }
+
+    amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
+    using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
+    BndryPhysBC cphysbc(Geom()[lev-1], bcs, bndry_func);
+    BndryPhysBC fphysbc(Geom()[lev], bcs, bndry_func);
+    amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, Geom()[lev-1], Geom()[lev],
+                                 cphysbc, 0, fphysbc, 0, refRatio(lev-1),
+                                 &amrex::cell_cons_interp, bcs, 0);
+}
+
+void AmrMeshState::FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf,  amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp) {
+    BL_ASSERT(lev > 0);
+
+    amrex::Vector<amrex::MultiFab*> cmf;
+    amrex::Vector<amrex::Real> ctime;
+    GetTerrainData(lev-1, time, cmf, ctime);
 
     if (cmf.size() != 1) {
         amrex::Abort("FillCoarsePatch: how did this happen?");
