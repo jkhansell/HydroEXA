@@ -20,7 +20,7 @@ Roe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
     using ReduceTuple = decltype(reduce_data)::Type;
 
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if(Gpu::notInLaunchRegion())
+#pragma omp parallel if(amrex::Gpu::notInLaunchRegion())
 #endif
     {
         for (amrex::MFIter mfi(S, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
@@ -259,10 +259,10 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
 
     // fill coarse/fine boundaries
     ctx.FillPatch(lev, time, U_o, ctx.UBCs, 0, U_o.nComp());
-    //ctx.FillPatch(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
+    ctx.FillPatchTerrain(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
 
 #ifdef AMREX_USE_OMP    
-#pragma omp parallel if (Gpu::notInLaunchRegion())
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
     {
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
@@ -275,11 +275,11 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                 amrex::Box face_box = mfi.nodaltilebox(dir);
                 // Output FL and FR directly from roeSolver
 
-                amrex::Real dA = (dir == 0) ? dx_local : dy_local; 
+                amrex::Real ds = (dir == 0) ? dx_local : dy_local; 
                 compute_amrex_effective_fluxes(
                     face_box, statein, z_arr,
                     D_minus_mf[dir].array(mfi), D_plus_mf[dir].array(mfi),
-                    dt_local, dA, dir
+                    dt_local, ds, dir
                 );
             }
         }
@@ -290,7 +290,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     // 4. LOCAL CONSERVATIVE CELL UPDATE (Exact Fluctuation Differencing)
     // ------------------------------------------------------------------------
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
     {
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
@@ -326,7 +326,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         << "hu=[" << U_n.min(1) << ", " << U_n.max(1) << "] "
         << "hv=[" << U_n.min(2) << ", " << U_n.max(2) << "]\n";
 
-    /*
+    
     // ------------------------------------------------------------------------
     // 5. PREPARE AND SYNCHRONIZE WITH FLUX REGISTERS
     // ------------------------------------------------------------------------
@@ -369,7 +369,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             }
 
         #ifdef AMREX_USE_OMP
-        #pragma omp parallel if (Gpu::notInLaunchRegion())
+        #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
         #endif
             {
                 for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
@@ -463,7 +463,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                     const amrex::Real dA = (idim == 0) ? dy : dx;
                     const amrex::Real scale = -dt*dA;
                     fr_as_crse->CrseInit(flux_crse[idim], idim, 0, 0, U_n.nComp(), scale,
-                                        amrex::FluxRegister::ADD);
+                                        amrex::FluxRegister::COPY);
                 }
             }
 
@@ -477,5 +477,5 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                 }
             }
         }
-    }*/
+    }
 }

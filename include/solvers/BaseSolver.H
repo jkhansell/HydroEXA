@@ -30,50 +30,48 @@ struct BaseSolver {
     }
 
     void compute_dt(amrex::Vector<amrex::Real>& dt,
-                    const amrex::Vector<amrex::MultiFab>& U,
-                    const amrex::Vector<amrex::MultiFab>& terrain,
-                    const amrex::Vector<amrex::Geometry>& geom,
-                    const amrex::Vector<amrex::IntVect>& ref_ratio,
-                    int finest_level, amrex::Real cfl) 
+                const amrex::Vector<amrex::MultiFab>& U,
+                const amrex::Vector<amrex::MultiFab>& terrain,
+                const amrex::Vector<amrex::Geometry>& geom,
+                const amrex::Vector<amrex::IntVect>& ref_ratio,
+                int finest_level, amrex::Real cfl) 
     {
         amrex::Vector<amrex::Real> dt_tmp(finest_level + 1);
         for (int lev = 0; lev <= finest_level; ++lev) {
             dt_tmp[lev] = compute_dt_level(U, terrain, geom, lev, cfl);
         }
 
+        // 1. Reduce minimums across ranks FIRST before printing or processing
+        amrex::ParallelDescriptor::ReduceRealMin(&dt_tmp[0], dt_tmp.size());
+
         if (amrex::ParallelDescriptor::IOProcessor()) {
             amrex::Print() << "Computed dt per level:\n";
             for (int lev = 0; lev <= finest_level; ++lev) {
-                amrex::Print()
-                    << "  Level " << lev
-                    << " : " << dt_tmp[lev] << "\n";
+                amrex::Print() << "  Level " << lev << " : " << dt_tmp[lev] << "\n";
             }
         }
 
-        // 1. Parallel reduction to get the true minimums across all MPI ranks
-        amrex::ParallelDescriptor::ReduceRealMin(&dt_tmp[0], dt_tmp.size());
-
-        // 2. Start with the dt calculated for the finest level
-        int max_lev = finest_level;
-        dt[max_lev] = dt_tmp[max_lev];
-
-        // 3. Work backwards from the finest level to the coarsest level
-        //    dt_coarse = dt_fine * ref_ratioEx
-        for (int lev = max_lev - 1; lev >= 0; --lev) {
-            // ref_ratio[lev][0] is the refinement ratio between 'lev' and 'lev+1'
-            dt[lev] = dt[lev + 1] * ref_ratio[lev][0];
-            
-            // Safety check: Ensure the scaled dt doesn't accidentally 
-            // violate the original physics constraints of this coarser level
-            dt[lev] = std::min(dt[lev], dt_tmp[lev]);
+        // 2. Project all level constraints up to Level 0 to find the safest global coarse dt
+        amrex::Real dt_0 = dt_tmp[0];
+        amrex::Real factor = 1.0;
+        for (int lev = 1; lev <= finest_level; ++lev) {
+            factor *= static_cast<amrex::Real>(ref_ratio[lev - 1][0]);
+            // Scale the fine level constraint up to Level 0 equivalent and cap dt_0
+            dt_0 = std::min(dt_0, dt_tmp[lev] * factor);
         }
-    
+
+        // 3. Assign Level 0
+        dt[0] = dt_0;
+
+        // 4. Downscale to fine levels using STRICT integer division
+        for (int lev = 1; lev <= finest_level; ++lev) {
+            dt[lev] = dt[lev - 1] / static_cast<amrex::Real>(ref_ratio[lev - 1][0]);
+        }
+
         if (amrex::ParallelDescriptor::IOProcessor()) {
             amrex::Print() << "Final dt per level:\n";
             for (int lev = 0; lev <= finest_level; ++lev) {
-                amrex::Print()
-                    << "  Level " << lev
-                    << " : " << dt[lev] << "\n";
+                amrex::Print() << "  Level " << lev << " : " << dt[lev] << "\n";
             }
         }    
     }

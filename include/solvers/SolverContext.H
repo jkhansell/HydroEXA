@@ -63,6 +63,14 @@ struct SolverContext
         const amrex::Vector<amrex::BCRec>&,
         int,
         int)> FillPatch;
+    
+    std::function<void(
+        int,
+        amrex::Real,
+        amrex::MultiFab&,
+        const amrex::Vector<amrex::BCRec>&,
+        int,
+        int)> FillPatchTerrain;
 
     std::function<amrex::iMultiFab(
         const amrex::MultiFab&,
