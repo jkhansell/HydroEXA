@@ -1,0 +1,61 @@
+# =====================================================================
+# HYDROEXA — 2D Rectangular Dam Break Test Case
+# =====================================================================
+# This is a 1D problem (planar discontinuity) ideal for debugging fluxes.
+# The exact solution consists of:
+#   - A left-going rarefaction wave (into the high-pressure side)
+#   - A right-going shock wave (into the low-pressure side)
+# Any y-dependence in the solution is purely numerical error.
+#
+# Reference: St. Venant (1871), Sod (1978), Toro "Riemann Solvers and
+#           the Numerical Methods for Hyperbolic PDEs", Ch. 3.
+# =====================================================================
+
+# =====================================================================
+# HYDROEXA CORE SIMULATION PARAMETERS
+# =====================================================================
+HydroEXA.max_time          = 10       
+HydroEXA.model             = "Roe"     
+HydroEXA.cfl               = 0.5        
+
+HydroEXA.h_grad_thresh     = 0.005 0.0075 0.01 0.015
+HydroEXA.umag_grad_thresh  = 0.005 0.0075 0.01 0.015
+HydroEXA.z_grad_thresh     = 0.005 0.0075 0.01 0.015
+HydroEXA.mass_diag_freq    = 10
+
+# =====================================================================
+# BOUNDARY CONDITIONS
+# =====================================================================
+# Physical BC type indices:
+#   0 = Reflective Walls    1 = Transmissive Boundaries
+#
+# For pure flux debugging, use periodic (0 0) to eliminate BC effects entirely.
+
+HydroEXA.lo_bc         =  1 0   # X_BC, Y_BC
+HydroEXA.hi_bc         =  1 0   # X_BC, Y_BC  
+
+# =====================================================================
+# AMR RUNTIME ADAPTIVITY CONFIGURATION
+# =====================================================================
+amr.max_level              = 4       # Two level AMR for this test
+amr.regrid_int             = 10
+amr.do_reflux              = 1
+amr.do_subcycle            = 1
+amr.blocking_factor        = 16
+amr.v                      = 1
+
+amr.terrain_ref_lev        = 1
+
+amr.ref_ratio              = 2 2 2 2
+
+# =====================================================================
+# SYSTEM PARALLEL DATA / INPUT OUTPUT MANAGEMENT
+# ====================================================================
+io.chk_freq                = 10000
+io.plot_freq               = 1       # Dump every step for debugging
+io.chk_type                = HDF5
+io.async_io                = 1
+
+io.input_file              = "RectangularDambreak.h5"
+io.plot_file               = "plotfiles/plt"
+io.chk_file                = "checkpoints/chk"
