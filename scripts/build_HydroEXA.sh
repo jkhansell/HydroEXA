@@ -10,20 +10,12 @@
 set -e
 set -o pipefail
 
-# --- Error handler ---
-cleanup_on_fail() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo -e "\n\033[0;31m\033[1m########################################"
-        echo "   CRITICAL ERROR: Build Failed! (Exit: $exit_code)"
-        echo -e "########################################\033[0m\n"
-    fi
-}
-trap cleanup_on_fail EXIT
-
 # --- Load shared library ---
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 source "${SCRIPT_DIR}/lib.sh"
+
+# --- Resolve paths ---
+resolve_paths
 
 # --- Parse arguments ---
 if [ $# -ne 3 ]; then
@@ -34,12 +26,6 @@ fi
 TARGET=$1
 BUILD_TYPE=$2
 PRECISION=$3
-
-# --- Resolve paths ---
-resolve_paths
-
-# --- Validate target ---
-preflight "${TARGET}"
 
 # --- Source machine-specific module loads ---
 MACHINE_FILE="${HYDROEXA_DIR}/machines/${TARGET}"
@@ -55,6 +41,11 @@ export HDF5_ROOT="${HYDROEXA_DIR}/tpl/hdf5/install"
 export HDF5_HOME="${HDF5_ROOT}"
 export AMREX_ROOT="${AMREX_DIR}/install/lib/cmake/AMReX"
 
+export HYDROEXA_SRC=${HYDROEXA_DIR}
+export HYDROEXA_BUILD=${HYDROEXA_DIR}/build
+export HYDROEXA_INSTALL=${HYDROEXA_DIR}/install
+
+
 # --- Step 1: HDF5 ---
 print_banner "${BLUE}" "Step 1/3: Building HDF5"
 source "${HYDROEXA_DIR}/scripts/build_HDF5.sh"
@@ -64,7 +55,7 @@ print_banner "${BLUE}" "Step 2/3: Building AMReX"
 source "${HYDROEXA_DIR}/scripts/build_AMReX.sh"
 
 # --- Step 3: HydroEXA ---
-if [ -d "${install_dir}" ] && [ -f "${install_dir}/bin/HydroEXA" ]; then
+if [ -d "${HYDROEXA_INSTALL}" ] && [ -f "${HYDROEXA_INSTALL}/bin/HydroEXA" ]; then
     print_banner "${GREEN}" "HydroEXA already installed for ${TARGET}"
     exit 0
 fi
@@ -73,22 +64,23 @@ print_banner "${BLUE}" "Step 3/3: Building HydroEXA for ${TARGET}"
 
 # --- Configure ---
 print_banner "${BLUE}" "Configuring"
-rm -f "${build_dir}/CMakeCache.txt"
 
-cmake -S "${HYDROEXA_DIR}" -B "${build_dir}"                              \
+rm -f "${HYDROEXA_BUILD}/CMakeCache.txt"
+
+cmake -S "${HYDROEXA_SRC}" -B "${HYDROEXA_BUILD}"                         \
     -DHYDROEXA_GPU_BACKEND="${TARGET}"                                    \
     -DHDF5_ROOT="${HDF5_ROOT}"                                            \
     -DAMReX_ROOT="${AMREX_DIR}/install/lib/cmake/AMReX"                   \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"                                    \
-    -DCMAKE_INSTALL_PREFIX="${install_dir}"                               \
+    -DCMAKE_INSTALL_PREFIX="${HYDROEXA_INSTALL}"                          \
     -DCMAKE_CXX_COMPILER="${CXX}"                                         \
     ${GPU_FLAGS}
 
 # --- Build & Install ---
 print_banner "${BLUE}" "Building"
-cmake --build "${build_dir}" -j 16
+cmake --build "${HYDROEXA_BUILD}" -j 16
 
 print_banner "${BLUE}" "Installing"
-cmake --install "${build_dir}"
+cmake --install "${HYDROEXA_BUILD}"
 
 print_banner "${GREEN}" "HydroEXA build completed"

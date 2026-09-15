@@ -4,9 +4,14 @@ module purge
 module load mpich/4.1.1
 module load cuda/12.4.0
 module load gcc/13.4.0
-module load hdf5/1.14.4-parallel-mpich-4.1.1
 module load szip/2.1
+module load hdf5/1.14.6-parallel-mpich-4.1.1
 
-
-export HDF5_ROOT=/opt/libs/hdf5-1.14.4-parallel-mpich-4.1.1
+export HDF5_ROOT=/opt/libs/hdf5-1.14.6-parallel-mpich-4.1.1
 export CMAKE_FLAGS="-DHDF5_ROOT=$HDF5_ROOT"
+
+export CC=mpicc
+export CXX=mpicxx
+export FC=mpif90
+
+export GPU_FLAGS="-DCMAKE_CUDA_ARCHITECTURES=89 -DAMReX_GPU_BACKEND=CUDA"

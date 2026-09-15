@@ -1,3 +1,8 @@
 #!/bin/bash
 
-export HDF5_ROOT=/home/jkhansell/miniforge3/envs/hydroexa_env
+export CC=gcc
+export CXX=g++
+export FC=gfortran
+GPU_FLAGS="
+    -DAMReX_GPU_BACKEND=NONE
+"

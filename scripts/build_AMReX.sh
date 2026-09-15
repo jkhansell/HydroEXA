@@ -37,8 +37,8 @@ else
 fi
 
 cmake -S ${AMREX_DIR} -B ${build_dir}          \
-    -DAMReX_MPI=OFF                            \
-    -DAMReX_OMP=OFF                            \
+    -DAMReX_MPI=ON                             \
+    -DAMReX_OMP=ON                             \
     -DAMReX_PARTICLES=ON                       \
     -DAMReX_SPACEDIM=2                         \
     -DAMReX_LINEAR_SOLVERS=ON                  \
