@@ -10,6 +10,8 @@ _deps/
 **/cmake-build-*/
 **/[Ii]nstall*/
 
+**/plotfiles/
+
 **/*.gif
 
 CMakeCache.txt
@@ -83,7 +85,7 @@ install_manifest.txt
 # ============================================================
 
 # Bytecode
-__pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 
@@ -294,7 +296,7 @@ logs/
 
 **/[Ee]rr.log
 **/[Ll]og.log
-**/[Bb]acktrace.0
+**/[Bb]acktrace.*
 
 # ============================================================
 # HPC / Cluster
