@@ -1,11 +1,16 @@
 #!/bin/bash
-
 # ============================================================
-# Error Handling (Crash on Fail)
+# build_HydroEXA.sh — Main build orchestrator
 # ============================================================
-set -e          # Exit immediately if any command returns a non-zero status
-set -o pipefail # Captures errors hidden inside piped commands
+# Usage: bash scripts/build_HydroEXA.sh machine.{cpu,gpu} [Release|Debug] [DOUBLE|SINGLE]
+#
+# Pipeline: HDF5 → AMReX → HydroEXA
+# ============================================================
 
+set -e
+set -o pipefail
+
+# --- Error handler ---
 cleanup_on_fail() {
     local exit_code=$?
     if [ $exit_code -ne 0 ]; then
@@ -16,86 +21,70 @@ cleanup_on_fail() {
 }
 trap cleanup_on_fail EXIT
 
-# ============================================================
-# Import Machine Environment Function
-# ============================================================
+# --- Load shared library ---
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+source "${SCRIPT_DIR}/lib.sh"
 
-if [ -f "${SCRIPT_DIR}/print_banner.sh" ]; then
-    source "${SCRIPT_DIR}/print_banner.sh"
-fi
-
-if [ -f "${SCRIPT_DIR}/machine_selection.sh" ]; then
-    source "${SCRIPT_DIR}/machine_selection.sh"
-else
-    if type print_banner &>/dev/null; then
-        print_banner "${RED}" "Missing machine selection file!"
-    else
-        echo "Missing machine selection file!"
-    fi
-    exit 1
-fi
-
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 [frontier.gpu|frontier.cpu|juwelsbooster.gpu|juwelsbooster.cpu|local.gpu|local.cpu]"
+# --- Parse arguments ---
+if [ $# -ne 3 ]; then
+    echo "Usage: $0 machine.{cpu,gpu} [Release|Debug|...] [DOUBLE|SINGLE]}"
     exit 1
 fi
 
 TARGET=$1
-BUILD_TYPE=$2 
+BUILD_TYPE=$2
+PRECISION=$3
 
-# ============================================================
-# Directories
-# ============================================================
-export HYDROEXA_DIR=$(git rev-parse --show-toplevel)
-export AMREX_DIR="${HYDROEXA_DIR}/tpl/amrex"
+# --- Resolve paths ---
+resolve_paths
 
-build_dir="${HYDROEXA_DIR}/build"
-install_dir="${HYDROEXA_DIR}/install"
+# --- Validate target ---
+preflight "${TARGET}"
 
-# ============================================================
-# Machine-specific configuration
-# ============================================================
-if [ ! -f "${HYDROEXA_DIR}/machines/${TARGET}" ]; then
-    print_banner "${RED}" "Machine target profile folder missing: ${TARGET}"
-    exit 1
+# --- Source machine-specific module loads ---
+MACHINE_FILE="${HYDROEXA_DIR}/machines/${TARGET}"
+if [ -f "${MACHINE_FILE}" ]; then
+    print_banner "${BLUE}" "Sourcing machine config: ${MACHINE_FILE}"
+    source "${MACHINE_FILE}"
+else
+    print_banner "${RED}" "No machine config found at ${MACHINE_FILE}"
 fi
 
-source "${HYDROEXA_DIR}/machines/${TARGET}"
+# --- Export install paths (inherited by all child scripts) ---
+export HDF5_ROOT="${HYDROEXA_DIR}/tpl/hdf5/install"
+export HDF5_HOME="${HDF5_ROOT}"
+export AMREX_ROOT="${AMREX_DIR}/install/lib/cmake/AMReX"
 
-if ! set_machine_env "${TARGET}"; then
-    print_banner "${RED}" "Unknown target: ${TARGET}"
-    exit 1
-fi
+# --- Step 1: HDF5 ---
+print_banner "${BLUE}" "Step 1/3: Building HDF5"
+source "${HYDROEXA_DIR}/scripts/build_HDF5.sh"
 
-bash "${HYDROEXA_DIR}/scripts/build_AMReX.sh" "${TARGET}" "${BUILD_TYPE}"
+# --- Step 2: AMReX ---
+print_banner "${BLUE}" "Step 2/3: Building AMReX"
+source "${HYDROEXA_DIR}/scripts/build_AMReX.sh"
 
+# --- Step 3: HydroEXA ---
 if [ -d "${install_dir}" ] && [ -f "${install_dir}/bin/HydroEXA" ]; then
     print_banner "${GREEN}" "HydroEXA already installed for ${TARGET}"
     exit 0
 fi
 
-print_banner "${BLUE}" "Building HydroEXA for ${TARGET}"
+print_banner "${BLUE}" "Step 3/3: Building HydroEXA for ${TARGET}"
 
-# ============================================================
-# Configure
-# ============================================================
+# --- Configure ---
 print_banner "${BLUE}" "Configuring"
-
 rm -f "${build_dir}/CMakeCache.txt"
 
-# Added -DHYDROEXA_GPU_BACKEND passing explicitly to CMake
 cmake -S "${HYDROEXA_DIR}" -B "${build_dir}"                              \
     -DHYDROEXA_GPU_BACKEND="${TARGET}"                                    \
+    -DHDF5_ROOT="${HDF5_ROOT}"                                            \
     -DAMReX_ROOT="${AMREX_DIR}/install/lib/cmake/AMReX"                   \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"                                    \
     -DCMAKE_INSTALL_PREFIX="${install_dir}"                               \
     -DCMAKE_CXX_COMPILER="${CXX}"                                         \
-    ${GPU_FLAGS} 
+    ${GPU_FLAGS}
 
-# ============================================================
-# Build & Install
-# ============================================================
+# --- Build & Install ---
 print_banner "${BLUE}" "Building"
 cmake --build "${build_dir}" -j 16
 
