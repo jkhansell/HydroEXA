@@ -3,7 +3,7 @@
 // Extracted from IOHandler::WritePlotfile to decouple native I/O
 // from the IOHandler class itself.
 
-#include "NativePlotFile.H"
+#include <io/NativePlotFile.H>
 
 // STD
 #include <string>
@@ -23,7 +23,7 @@ void WriteNativePlotfile(
     const amrex::Vector<amrex::MultiFab>& U,
     const amrex::Vector<amrex::MultiFab>& Terrain,
     const amrex::Vector<amrex::Geometry>& geom,
-    const amrex::Vector<amrex::Real>& ref_ratio,
+    const amrex::Vector<amrex::IntVect>& ref_ratio,
     int finest_level)
 {
     // 1. Safely calculate the TRUE number of active, fully allocated levels.

@@ -1,14 +1,9 @@
 #ifndef NATIVE_PLOTFILE_H
 #define NATIVE_PLOTFILE_H
 
-#include <AMReX_REAL.H>
 #include <string>
 
-// Forward declarations
-namespace amrex {
-    class MultiFab;
-    struct Geometry;
-}
+#include <AMReX_PlotFileUtil.H>
 
 // Write a multi-level plotfile using AMReX's native format.
 // Takes raw AMReX types — no abstraction layer.
@@ -29,7 +24,7 @@ void WriteNativePlotfile(
     const amrex::Vector<amrex::MultiFab>& U,
     const amrex::Vector<amrex::MultiFab>& Terrain,
     const amrex::Vector<amrex::Geometry>& geom,
-    const amrex::Vector<amrex::Real>& ref_ratio,
+    const amrex::Vector<amrex::IntVect>& ref_ratio,
     int finest_level);
 
 #endif // NATIVE_PLOTFILE_H

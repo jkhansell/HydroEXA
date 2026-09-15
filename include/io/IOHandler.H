@@ -8,7 +8,6 @@
 
 #include <io/Checkpointer.H>
 #include <io/CheckpointerContext.H>
-#include <io/PlotFileWriter.H>
 #include <io/HDF5_File.H>
 
 // Embedded metadata container for geometric properties
@@ -53,8 +52,6 @@ public:
                           HDF5SpatialMetadata &meta);
 
     void CloseHDF5();
-
-    void SetPlotfileWriter(std::unique_ptr<PlotfileWriter> writer);
 
     void WriteCheckpoint(const CheckpointerContext& ctx, int iteration);
 
