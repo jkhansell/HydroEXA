@@ -261,13 +261,12 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
         flux_reg[lev] = nullptr;
     }
 
-    FillCoarsePatchTerrain(lev, time, DynamicTerrain[lev], 0, ncomp_Terrain);
+    FillCoarsePatchTerrain(lev, time, DynamicTerrain[lev], Terrain_bcs, 0, ncomp_Terrain);
     FillCoarsePatch(lev, time, U_new[lev], U_bcs, 0, ncomp_U);
-
 }
 
 void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm) {
-    
+
     amrex::MultiFab new_U(ba, dm, ncomp_U, ngrow_U);
     amrex::MultiFab old_U(ba, dm, ncomp_U, ngrow_U);
     amrex::MultiFab new_DT(ba, dm, ncomp_Terrain, ngrow_Terrain);

@@ -61,9 +61,12 @@ HydroEXA/
 │   ├── HydroEXADriver.cpp      # Main entry point (amrex::Initialize → HydroEXA::Initialize → Compute → Finalize)
 │   ├── HydroEXA.cpp            # Core driver: ReadParameters, Initialize, Compute (time-stepping loop), Finalize
 │   ├── io/
-│   │   ├── IOHandler.cpp       # Input file parsing, plotfile writing, checkpoint I/O
-│   │   └── Checkpointer.cpp    # State checkpointing/restoring (HDF5 or Native format)
+│   │   ├── IOHandler.cpp       # Input file parsing, plotfile/checkpoint orchestration
+│   │   ├── Checkpointer.cpp    # State checkpointing/restoring (HDF5 or Native format)
+│   │   ├── HDF5PlotFile.cpp    # HDF5 plotfile writer wrapper (calls AMReX HDF5 plotfile utilities)
+│   │   └── NativePlotFile.cpp  # Native plotfile writer wrapper (calls AMReX native plotfile utilities)
 │   ├── state/
+│   │   ├── AmrMeshState.H      # AmrCore subclass: level state, terrain, solver, BCs, flux regs
 │   │   ├── AmrMeshState_Init.cpp    # Constructor, Initialize(), InitializeTerrainFluid(), InitializeSolver()
 │   │   ├── AmrMeshState_AMR.cpp     # AMR overrides: MakeNewLevelFromScratch/Coarse, RemakeLevel, ClearLevel, ErrorEst, PostProcessBaseGrids
 │   │   ├── AmrMeshState_Physics.cpp # Time-stepping: ComputeDt, TimeStepWithSubcycling, AdvanceLevel
@@ -74,6 +77,8 @@ HydroEXA/
 │       └── MaskedAverageDown.cpp  # GPU-aware volume-weighted terrain down-sampling with NODATA masking
 ├── include/
 │   ├── HydroEXA.H              # Main HydroEXA class declaration
+│   ├── state/
+│   │   └── AmrMeshState.H      # AmrCore subclass: level state, terrain, solver, BCs, flux regs
 │   ├── solvers/
 │   │   ├── BaseSolver.H        # CRTP abstract solver interface (compute_fluxes, compute_dt, tag_cells)
 │   │   ├── SolverVariant.H     # std::variant wrapper for concrete solver dispatch
@@ -83,13 +88,12 @@ HydroEXA/
 │   │   ├── RoeExnerFCM.H       # Roe solver for Exner term (FCM scheme) — declared but not implemented
 │   │   └── kernels/Roe.H       # GPU kernel: roeSolver() — device-side Riemann solver
 │   ├── io/
-│   │   ├── IOHandler.H         # Input parsing, plotfile/checkpoint I/O
+│   │   ├── IOHandler.H         # Input parsing, plotfile/checkpoint orchestration
 │   │   ├── Checkpointer.H      # Checkpoint read/write
 │   │   ├── CheckpointerContext.H  # Context for checkpoint I/O
-│   │   ├── PlotFileWriter.H    # Base plotfile writer
-│   │   ├── HDF5_File.H         # HDF5 I/O utilities (HDF5Reader)
-│   │   ├── HDF5PlotFileWriter.H
-│   │   └── NativePlotFileWriter.H
+│   │   ├── HDF5_File.H         # HDF5 I/O utilities (HDF5Reader class for input parsing)
+│   │   ├── HDF5PlotFile.H      # HDF5 plotfile writer (multi-level MultiFab → HDF5)
+│   │   └── NativePlotFile.H    # Native plotfile writer (multi-level MultiFab → AMReX native)
 │   ├── boundaries/
 │   │   └── BCFill.H            # Physical BC type → mathematical BCRec mapping + HydroEXAFill functor
 │   └── utils/
@@ -114,11 +118,12 @@ HydroEXA/
 - **CRTP solver interface**: `BaseSolver<Derived>` is a CRTP base; concrete solvers (currently only `Roe`) inherit and implement `compute_fluxes_Impl`, `compute_dt_Impl`, `tag_cells_Impl`.
 - **Variant dispatch**: `SolverVariant` wraps `std::variant<std::monostate, Roe>` for runtime solver selection based on input parameters.
 - **Two-phase initialization**: `HydroEXA` constructor reads inputs via `ReadParameters()`, then `Initialize()` sets up mesh state and constructs the solver variant (avoids virtual calls in constructors).
+- **AmrMeshState class**: `include/state/AmrMeshState.H` declares the full AMR state as an `amrex::AmrCore` subclass — owns `U_old`/`U_new` (conserved variables), `DynamicTerrain`, `StaticTerrain` (ground-truth bathymetry), flux registers, BCRecs, and the solver variant. Implementation split across 4 source files: `_Init.cpp`, `_AMR.cpp`, `_Physics.cpp`, `_Utils.cpp`.
 - **GPU kernels**: Solver flux computations are split into host-side C++ (`Roe.cpp`) and device-side kernels (`kernels/Roe.H`) using `AMREX_GPU_DEVICE` lambdas via `amrex::ParallelFor` and `amrex::ReduceOps`, portable across CUDA/HIP.
 - **StaticTerrain pattern**: A single high-resolution `MultiFab` is loaded once from HDF5 at startup as the "ground truth" terrain database. `TerrainMapStaticToDynamic` maps terrain to each AMR level using NODATA-aware `masked_average_down` (finer→coarser) or `cell_cons_interp` (coarser→finer).
 - **Mesh pruning**: `PostProcessBaseGrids` removes AMR Level 0 blocks that are 100% NODATA (bathymetry = -9999.0), reducing memory and computation.
 - **Structured logging**: `Logging.H` provides a `Logger` singleton with `LogLevel` enum (INFO=0, DIAG=1, DEBUG=2, EXPL=3, WARN=4, ERROR=5). Configurable via `HydroEXA.log_verbosity`. IO-processor gated.
-- **I/O**: Supports AMReX native plotfiles, HDF5 plotfiles, and HDF5/native checkpoints. `IOHandler` orchestrates all I/O.
+- **I/O**: `IOHandler` orchestrates all I/O. Plotfiles: `HDF5PlotFile.H`/`NativePlotFile.H` wrap AMReX plotfile utilities for HDF5 or native format. Checkpoints: `Checkpointer.H`/`Checkpointer.cpp` support HDF5 and native checkpoint formats. Input parsing: `HDF5_File.H` provides `HDF5Reader` class for reading HDF5 terrain/bathymetry data.
 
 ## Running Simulations
 
@@ -161,12 +166,13 @@ Python deps managed by `uv` (see `pyproject.toml`).
 | Add new solver | `include/solvers/BaseSolver.H`, `include/solvers/SolverVariant.H`, `src/solvers/Roe.cpp` |
 | Modify time-stepping | `src/HydroEXA.cpp` (Compute), `src/state/AmrMeshState_Physics.cpp` |
 | Modify AMR/refinement | `src/state/AmrMeshState_AMR.cpp`, `src/solvers/Roe.cpp` (tag_cells) |
-| Modify I/O format | `src/io/IOHandler.cpp`, `src/io/Checkpointer.cpp`, `include/io/` |
+| Modify I/O format | `src/io/IOHandler.cpp`, `src/io/Checkpointer.cpp`, `src/io/HDF5PlotFile.cpp`, `src/io/NativePlotFile.cpp`, `include/io/` |
 | Modify boundary conditions | `include/boundaries/BCFill.H` |
 | Add new physics constants | `include/utils/Constants.H` |
 | Add logging | `include/utils/Logging.H` |
 | Build for different machines | `machines/`, `scripts/build_HydroEXA.sh` |
 | Terrain/NODATA handling | `src/state/AmrMeshState_Init.cpp`, `src/utils/MaskedAverageDown.cpp` |
+| Modify AMR state/level management | `include/state/AmrMeshState.H`, `src/state/AmrMeshState_*.cpp` |
 
 ## Dependencies
 
