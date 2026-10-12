@@ -44,12 +44,12 @@ struct BaseSolver {
         // 1. Reduce minimums across ranks FIRST before printing or processing
         amrex::ParallelDescriptor::ReduceRealMin(&dt_tmp[0], dt_tmp.size());
 
-        if (amrex::ParallelDescriptor::IOProcessor()) {
-            amrex::Print() << "Computed dt per level:\n";
-            for (int lev = 0; lev <= finest_level; ++lev) {
-                amrex::Print() << "  Level " << lev << " : " << dt_tmp[lev] << "\n";
-            }
-        }
+        //if (amrex::ParallelDescriptor::IOProcessor()) {
+        //    amrex::Print() << "Computed dt per level:\n";
+        //    for (int lev = 0; lev <= finest_level; ++lev) {
+        //        amrex::Print() << "  Level " << lev << " : " << dt_tmp[lev] << "\n";
+        //    }
+        //}
 
         // 2. Project all level constraints up to Level 0 to find the safest global coarse dt
         amrex::Real dt_0 = dt_tmp[0];
@@ -68,12 +68,12 @@ struct BaseSolver {
             dt[lev] = dt[lev - 1] / static_cast<amrex::Real>(ref_ratio[lev - 1][0]);
         }
 
-        if (amrex::ParallelDescriptor::IOProcessor()) {
-            amrex::Print() << "Final dt per level:\n";
-            for (int lev = 0; lev <= finest_level; ++lev) {
-                amrex::Print() << "  Level " << lev << " : " << dt[lev] << "\n";
-            }
-        }    
+        // if (amrex::ParallelDescriptor::IOProcessor()) {
+        //     amrex::Print() << "Final dt per level:\n";
+        //     for (int lev = 0; lev <= finest_level; ++lev) {
+        //         amrex::Print() << "  Level " << lev << " : " << dt[lev] << "\n";
+        //     }
+        // }    
     }
 
     void tag_cells(amrex::TagBoxArray& tags,

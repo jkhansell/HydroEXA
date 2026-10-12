@@ -8,8 +8,9 @@ AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 void roeSolver(
     amrex::Real hi, amrex::Real hui, amrex::Real hvi, amrex::Real zi, amrex::Real ni,
     amrex::Real hj, amrex::Real huj, amrex::Real hvj, amrex::Real zj, amrex::Real nj,
-    amrex::Real D_minus[3],       // Array to return F - S_minus (for right cell j)
-    amrex::Real D_plus[3],        // Array to return F + S_plus  (for left cell i)
+    amrex::Real F[3],       // Array to return F - S_minus (for right cell j)
+    amrex::Real S_minus[3],       // Array to return F - S_minus (for right cell j)
+    amrex::Real S_plus[3],        // Array to return F + S_plus  (for left cell i)
     const amrex::Real dt,
     const amrex::Real dx,
     const amrex::Real nx,
@@ -162,11 +163,11 @@ void roeSolver(
         }
     }
 
-    // --- Allocate temporary structures for rotated updates ---
-    amrex::Real F[3];
-    amrex::Real S_minus[3] = {0.0, 0.0, 0.0};
-    amrex::Real S_plus[3]  = {0.0, 0.0, 0.0};
-
+    for (int k = 0; k < 3; k++) {
+        S_minus[k]  = 0.0; 
+        S_plus[k]   = 0.0; 
+    } 
+    
     // Initialize physical center-flux component
     F[0] = 0.5 * (hi * uhati + hj * uhatj);
     F[1] = 0.5 * (hi * uhati * uhati + 0.5 * PhysConstants::GRAV() * hi * hi +
@@ -179,19 +180,18 @@ void roeSolver(
         amrex::Real alpha_k  = (k == 0) ? alpha0  : ((k == 1) ? alpha1  : alpha2);
         amrex::Real beta_k   = (k == 0) ? beta0   : ((k == 1) ? beta1   : beta2);
 
-        amrex::Real e0 = (k == 1) ? 0.0    : 1.0;
+        amrex::Real e0 = (k == 1) ? 0.0     : 1.0;
         amrex::Real e1 = (k == 0) ? lambda0 : (k == 1 ? 0.0     : lambda2);
         amrex::Real e2 = (k == 0) ? vtilde  : (k == 1 ? ctilde  : vtilde);
 
         amrex::Real flux = 0.5 * std::abs(lambda_k) * alpha_k;
-
         
         F[0] -= flux * e0; 
         F[1] -= flux * e1; 
         F[2] -= flux * e2;
 
         // Symmetric Upwind Distribution of Source Terms
-        if (lambda_k > 0.0) { 
+        if (lambda_k > 0.0) {
             S_minus[0] += beta_k * e0;
             S_minus[1] += beta_k * e1;
             S_minus[2] += beta_k * e2;
@@ -202,26 +202,22 @@ void roeSolver(
         }
     }
 
-    // --- Assemble D_minus and D_plus ---
-    D_minus[0] = F[0] - S_minus[0];
-    D_minus[1] = F[1] - S_minus[1];
-    D_minus[2] = F[2] - S_minus[2];
-
-    D_plus[0]  = F[0] + S_plus[0];
-    D_plus[1]  = F[1] + S_plus[1];
-    D_plus[2]  = F[2] + S_plus[2];
-
     // --- Rotate Back Both Effective Fluxes into Global Coordinates ---
     {
-        amrex::Real tmp1 = D_minus[1];
-        amrex::Real tmp2 = D_minus[2];
-        D_minus[1] = tmp1 * nx - tmp2 * ny;
-        D_minus[2] = tmp1 * ny + tmp2 * nx;
+        amrex::Real tmp1 = F[1];
+        amrex::Real tmp2 = F[2];
+        F[1] = tmp1 * nx - tmp2 * ny;
+        F[2] = tmp1 * ny + tmp2 * nx;
 
-        tmp1 = D_plus[1];
-        tmp2 = D_plus[2];
-        D_plus[1] = tmp1 * nx - tmp2 * ny;
-        D_plus[2] = tmp1 * ny + tmp2 * nx;
+        tmp1 = S_minus[1];
+        tmp2 = S_minus[2];
+        S_minus[1] = tmp1 * nx - tmp2 * ny;
+        S_minus[2] = tmp1 * ny + tmp2 * nx;
+
+        tmp1 = S_plus[1];
+        tmp2 = S_plus[2];
+        S_plus[1] = tmp1 * nx - tmp2 * ny;
+        S_plus[2] = tmp1 * ny + tmp2 * nx;
     }
 }
 

@@ -58,7 +58,7 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrai
             cphysbc, 0,             // Coarse BC handler & comp
             fphysbc, 0,             // Fine BC handler & comp
             ratio,
-            &amrex::cell_cons_interp, 
+            &amrex::pc_interp, 
             Terrain_bcs, 0
         );
         
@@ -358,7 +358,7 @@ void AmrMeshState::FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab&
         amrex::FillPatchTwoLevels(mf, time, cmf, ctime, fmf, ftime,
                                   0, icomp, ncomp, Geom()[lev-1], Geom()[lev],
                                   cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                  &amrex::cell_cons_interp, bcs, 0);
+                                  &amrex::pc_interp, bcs, 0);
     }
 }
 
@@ -399,7 +399,7 @@ void AmrMeshState::FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::Mul
     BndryPhysBC fphysbc(Geom()[lev], bcs, bndry_func);
     amrex::InterpFromCoarseLevel(mf, time, *cmf[0], 0, icomp, ncomp, Geom()[lev-1], Geom()[lev],
                                  cphysbc, 0, fphysbc, 0, refRatio(lev-1),
-                                 &amrex::cell_cons_interp, bcs, 0);
+                                 &amrex::pc_interp, bcs, 0);
 }
 
 void AmrMeshState::AverageDown (amrex::Vector<amrex::MultiFab>& arr) {

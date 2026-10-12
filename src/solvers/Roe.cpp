@@ -98,51 +98,40 @@ void Roe::tag_cells_Impl(amrex::TagBoxArray& tags,
 
             bool tag_cell = false;
 
-            // 1. Initial Step (t = 0): Tag based on Bathymetry Slope
-            if (time == 0.0) {
-                amrex::Real dzdx = (z_arr(i+1,j,k,0) - z_arr(i-1,j,k,0)) / (2.0 * dx[0]);
-                amrex::Real dzdy = (z_arr(i,j+1,k,0) - z_arr(i,j-1,k,0)) / (2.0 * dx[1]);
-                if (std::sqrt(dzdx*dzdx + dzdy*dzdy) > z_thresh) {
-                    tag_cell = true;
-                }
-            } 
-            // 2. Dynamic Steps (t > 0): Tag based on Fluid Depth (h) & Velocity Magnitude (|u|) Gradients
-            else {
-                // Component 0: h, Component 1: hu, Component 2: hv
-                amrex::Real h_c = u_arr(i,j,k,0);
+            // Component 0: h, Component 1: hu, Component 2: hv
+            amrex::Real h_c = u_arr(i,j,k,0);
+            
+            // Depth gradients
+            amrex::Real dhdx = (u_arr(i+1,j,k,0) - u_arr(i-1,j,k,0)) / (2.0 * dx[0]);
+            amrex::Real dhdy = (u_arr(i,j+1,k,0) - u_arr(i,j-1,k,0)) / (2.0 * dx[1]);
+            if (std::sqrt(dhdx*dhdx + dhdy*dhdy) > h_thresh) {
+                tag_cell = true;
+            }
+
+            // Velocity magnitude gradients (using small epsilon for dry bed safety)
+            if (!tag_cell) {
+                constexpr amrex::Real eps = 1.0e-6;
                 
-                // Depth gradients
-                amrex::Real dhdx = (u_arr(i+1,j,k,0) - u_arr(i-1,j,k,0)) / (2.0 * dx[0]);
-                amrex::Real dhdy = (u_arr(i,j+1,k,0) - u_arr(i,j-1,k,0)) / (2.0 * dx[1]);
-                if (std::sqrt(dhdx*dhdx + dhdy*dhdy) > h_thresh) {
+                auto get_u_mag = [=](int ii, int jj, int kk) {
+                    amrex::Real h  = u_arr(ii,jj,kk,0);
+                    amrex::Real hu = u_arr(ii,jj,kk,1);
+                    amrex::Real hv = u_arr(ii,jj,kk,2);
+                    if (h < eps) return 0.0;
+                    amrex::Real u = hu / h;
+                    amrex::Real v = hv / h;
+                    return std::sqrt(u*u + v*v);
+                };
+
+                amrex::Real u_mag_E = get_u_mag(i+1, j, k);
+                amrex::Real u_mag_W = get_u_mag(i-1, j, k);
+                amrex::Real u_mag_N = get_u_mag(i, j+1, k);
+                amrex::Real u_mag_S = get_u_mag(i, j-1, k);
+
+                amrex::Real dudx = (u_mag_E - u_mag_W) / (2.0 * dx[0]);
+                amrex::Real dudy = (u_mag_N - u_mag_S) / (2.0 * dx[1]);
+
+                if (std::sqrt(dudx*dudx + dudy*dudy) > u_thresh) {
                     tag_cell = true;
-                }
-
-                // Velocity magnitude gradients (using small epsilon for dry bed safety)
-                if (!tag_cell) {
-                    constexpr amrex::Real eps = 1.0e-6;
-                    
-                    auto get_u_mag = [=](int ii, int jj, int kk) {
-                        amrex::Real h  = u_arr(ii,jj,kk,0);
-                        amrex::Real hu = u_arr(ii,jj,kk,1);
-                        amrex::Real hv = u_arr(ii,jj,kk,2);
-                        if (h < eps) return 0.0;
-                        amrex::Real u = hu / h;
-                        amrex::Real v = hv / h;
-                        return std::sqrt(u*u + v*v);
-                    };
-
-                    amrex::Real u_mag_E = get_u_mag(i+1, j, k);
-                    amrex::Real u_mag_W = get_u_mag(i-1, j, k);
-                    amrex::Real u_mag_N = get_u_mag(i, j+1, k);
-                    amrex::Real u_mag_S = get_u_mag(i, j-1, k);
-
-                    amrex::Real dudx = (u_mag_E - u_mag_W) / (2.0 * dx[0]);
-                    amrex::Real dudy = (u_mag_N - u_mag_S) / (2.0 * dx[1]);
-
-                    if (std::sqrt(dudx*dudx + dudy*dudy) > u_thresh) {
-                        tag_cell = true;
-                    }
                 }
             }
 
@@ -159,8 +148,9 @@ Roe::compute_amrex_effective_fluxes(
     const amrex::Box& face_box,
     amrex::Array4<amrex::Real const> const& U,
     amrex::Array4<amrex::Real const> const& terrain,
-    amrex::Array4<amrex::Real> const& D_minus_mf,
-    amrex::Array4<amrex::Real> const& D_plus_mf,
+    amrex::Array4<amrex::Real> const& F,
+    amrex::Array4<amrex::Real> const& S_minus,
+    amrex::Array4<amrex::Real> const& S_plus,
     const amrex::Real dt, const amrex::Real dx, const int dir)
 {
     const amrex::Real nx = (dir == 0) ? 1.0 : 0.0;
@@ -185,15 +175,17 @@ Roe::compute_amrex_effective_fluxes(
         amrex::Real zj  = terrain(ri, rj, k, 0);
         amrex::Real nj  = terrain(ri, rj, k, 1);
 
-        amrex::Real D_minus[3] = {}; 
-        amrex::Real D_plus[3] = {};
+        amrex::Real fluxes[3] = {}; 
+        amrex::Real S_m[3] = {}; 
+        amrex::Real S_p[3] = {};
         roeSolver(hi, hui, hvi, zi, ni,
                   hj, huj, hvj, zj, nj,
-                  D_minus, D_plus, dt, dx, nx, ny);
+                  fluxes, S_m, S_p, dt, dx, nx, ny);
 
         for (int c = 0; c < 3; ++c) {
-            D_minus_mf(i, j, k, c) = D_minus[c];
-            D_plus_mf(i, j, k, c) = D_plus[c];
+            F(i, j, k, c) = fluxes[c];
+            S_minus(i, j, k, c) = S_m[c];
+            S_plus(i, j, k, c) = S_p[c];
         }
     });
 }
@@ -236,18 +228,22 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     // ------------------------------------------------------------------------
     // 2. ALLOCATE DUAL EFFECTIVE FLUXES (FL and FR)
     // ------------------------------------------------------------------------
-    amrex::MultiFab D_minus_mf[AMREX_SPACEDIM];
-    amrex::MultiFab D_plus_mf[AMREX_SPACEDIM];
+    amrex::MultiFab F[AMREX_SPACEDIM];
+    amrex::MultiFab S_minus[AMREX_SPACEDIM];
+    amrex::MultiFab S_plus[AMREX_SPACEDIM];
 
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
     {
         amrex::BoxArray ba = ctx.grids[lev];
         ba.surroundingNodes(dir);
-        D_minus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-        D_plus_mf[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
 
-        D_minus_mf[dir].setVal(0.0);
-        D_plus_mf[dir].setVal(0.0);
+        F[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+        S_minus[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+        S_plus[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+
+        F[dir].setVal(0.0);
+        S_minus[dir].setVal(0.0);
+        S_plus[dir].setVal(0.0);
     }
 
     // ------------------------------------------------------------------------
@@ -278,7 +274,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                 amrex::Real ds = (dir == 0) ? dx_local : dy_local; 
                 compute_amrex_effective_fluxes(
                     face_box, statein, z_arr,
-                    D_minus_mf[dir].array(mfi), D_plus_mf[dir].array(mfi),
+                    F[dir].array(mfi), S_minus[dir].array(mfi), S_plus[dir].array(mfi),
                     dt_local, ds, dir
                 );
             }
@@ -298,11 +294,14 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             const int ncomp = U_o.nComp();
             const amrex::Box& bx = mfi.tilebox();
 
-            auto const& Dminus_x = D_minus_mf[0].array(mfi);
-            auto const& Dplus_x = D_plus_mf[0].array(mfi);
+            auto const& Fx = F[0].array(mfi);
+            auto const& Fy = F[1].array(mfi);
 
-            auto const& Dminus_y = D_minus_mf[1].array(mfi);
-            auto const& Dplus_y = D_plus_mf[1].array(mfi);
+            auto const& Sminus_x = S_minus[0].array(mfi);
+            auto const& Splus_x = S_plus[0].array(mfi);
+
+            auto const& Sminus_y = S_minus[1].array(mfi);
+            auto const& Splus_y = S_plus[1].array(mfi);
 
             auto const& u_o = U_o.array(mfi);
             auto const& u_n = U_n.array(mfi);
@@ -313,24 +312,56 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                 for (int n = 0; n < ncomp; ++n)
                 {
                     u_n(i,j,k,n) = u_o(i,j,k,n)
-                                 - (dt_local/dx_local) * (Dminus_x(i+1,j,k,n) - Dplus_x(i,j,k,n))
-                                 - (dt_local/dy_local) * (Dminus_y(i,j+1,k,n) - Dplus_y(i,j,k,n));
+                                 - (dt_local/dx_local) * (Fx(i+1,j,k,n) - Fx(i,j,k,n))
+                                 - (dt_local/dy_local) * (Fy(i,j+1,k,n) - Fy(i,j,k,n))
+                                 + (dt_local/dx_local) * (Sminus_x(i+1,j,k,n) + Splus_x(i,j,k,n));
+                                 + (dt_local/dy_local) * (Sminus_y(i,j+1,k,n) + Splus_y(i,j,k,n));
                 }
             });
         }
     }
 
-    amrex::Print()
-        << "Level " << lev
-        << " h=["  << U_n.min(0) << ", " << U_n.max(0) << "] "
-        << "hu=[" << U_n.min(1) << ", " << U_n.max(1) << "] "
-        << "hv=[" << U_n.min(2) << ", " << U_n.max(2) << "]\n";
+    // amrex::Print()
+    //     << "Level " << lev
+    //     << " h=["  << U_n.min(0) << ", " << U_n.max(0) << "] "
+    //     << "hu=[" << U_n.min(1) << ", " << U_n.max(1) << "] "
+    //     << "hv=[" << U_n.min(2) << ", " << U_n.max(2) << "]\n";
 
     
     // ------------------------------------------------------------------------
     // 5. PREPARE AND SYNCHRONIZE WITH FLUX REGISTERS
     // ------------------------------------------------------------------------
+    
+// ------------------------------------------------------------------------
+    // 5. PREPARE AND SYNCHRONIZE WITH FLUX REGISTERS
+    // ------------------------------------------------------------------------
     if (ctx.do_reflux) {
+        // Send mapped boundary fluxes to AMReX FluxRegisters
+        if (fr_as_crse)
+        {
+            for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
+            {
+                const amrex::Real dA = (idim == 0) ? dy : dx;
+                const amrex::Real scale = -dt*dA;
+                fr_as_crse->CrseInit(F[idim], idim, 0, 0, U_n.nComp(), scale,
+                                    amrex::FluxRegister::COPY);
+            }
+        }
+
+        if (fr_as_fine)
+        {
+            for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
+            {
+                const amrex::Real dA = (idim == 0) ? dy : dx;
+                const amrex::Real scale = dt*dA;
+                fr_as_fine->FineAdd(F[idim], idim, 0, 0, U_n.nComp(), scale);
+            }
+        }
+    }
+}
+
+/*
+if (ctx.do_reflux) {
 
         if (fr_as_crse || fr_as_fine)
         {
@@ -424,12 +455,12 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                                     if (left_is_fine == 0 && right_is_fine == 1)
                                     {
                                         // Coarse cell is LEFT
-                                        fc(i,j,k,n) = Dm(i,j,k,n);
+                                        fc(i,j,k,n) = Dp(i,j,k,n);
                                     }
                                     else if (left_is_fine == 1 && right_is_fine == 0)
                                     {
                                         // Coarse cell is RIGHT
-                                        fc(i,j,k,n) = Dp(i,j,k,n);
+                                        fc(i,j,k,n) = Dm(i,j,k,n);
                                     }
                                 }
 
@@ -441,12 +472,12 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                                     if (face_idx == i_low)
                                     {
                                         // Fine cell is RIGHT
-                                        ff(i,j,k,n) = Dp(i,j,k,n);
+                                        ff(i,j,k,n) = Dm(i,j,k,n);
                                     }
                                     else if (face_idx == i_high)
                                     {
                                         // Fine cell is LEFT
-                                        ff(i,j,k,n) = Dm(i,j,k,n);
+                                        ff(i,j,k,n) = Dp(i,j,k,n);
                                     }
                                 }
                             }
@@ -463,7 +494,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                     const amrex::Real dA = (idim == 0) ? dy : dx;
                     const amrex::Real scale = -dt*dA;
                     fr_as_crse->CrseInit(flux_crse[idim], idim, 0, 0, U_n.nComp(), scale,
-                                        amrex::FluxRegister::COPY);
+                                        amrex::FluxRegister::ADD);
                 }
             }
 
@@ -478,4 +509,4 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             }
         }
     }
-}
+*/

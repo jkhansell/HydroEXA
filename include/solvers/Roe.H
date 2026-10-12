@@ -23,8 +23,9 @@ struct Roe : public BaseSolver<Roe> {
         const amrex::Box& face_box,
         amrex::Array4<amrex::Real const> const& U,
         amrex::Array4<amrex::Real const> const& terrain,
-        amrex::Array4<amrex::Real> const& D_minus_mf,
-        amrex::Array4<amrex::Real> const& D_plus_mf,
+        amrex::Array4<amrex::Real> const& F,
+        amrex::Array4<amrex::Real> const& S_minus,
+        amrex::Array4<amrex::Real> const& S_plus,
         const amrex::Real dt, const amrex::Real dx, const int dir
     );
 

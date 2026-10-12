@@ -14,10 +14,11 @@
 // Include concrete solvers (or forward declare them if preferred, but since they
 // no longer depend on AmrMeshState, they can be directly included safely)
 #include <solvers/Roe.H>
+#include <solvers/HydrostaticRoe.H>
 
 class SolverVariant {
 public:
-    using SolverType = std::variant<std::monostate, Roe>;
+    using SolverType = std::variant<std::monostate, Roe, HydrostaticRoe>;
 
     // Constructors
     SolverVariant() : m_solver(std::monostate{}) {}

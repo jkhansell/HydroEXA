@@ -168,6 +168,8 @@ void AmrMeshState::InitializeSolver()
 {
     if (physics_p.model == "Roe") {
         solver = Roe{};
+    } else if (physics_p.model == "HydrostaticRoe") {
+        solver = HydrostaticRoe{};
     } else {  // fill with else ifs later
         amrex::Abort("Unknown solver type: " + physics_p.model);
     }
