@@ -1,35 +1,13 @@
 [project]
-name = "hydroexa"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+name = "hydroexa-dev"
+version = "0.0.0"
 requires-python = ">=3.12"
 dependencies = [
-    "fiona>=1.10.1",
-    "geopandas>=1.1.4",
-    "h5py>=3.16.0",
-    "imageio>=2.37.4",
-    "matplotlib>=3.11.1",
-    "numpy>=2.5.1",
-    "polars>=1.43.0",
-    "pyogrio>=0.13.0",
-    "rasterio>=1.5.0",
-    "scipy>=1.18.0",
-    "shapely>=2.1.2",
-    "yt>=4.4.2",
-]
-
-[project.optional-dependencies]
-gdal = [
-    "gdal>=3.0.0",
+    "pyhydroexa",
 ]
 
 [tool.uv.sources]
-gdal = [
-  { index = "gdal-wheels", marker = "sys_platform == 'linux'" },
-]
+pyhydroexa = { workspace = true }
 
-[[tool.uv.index]]
-name = "gdal-wheels"
-url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/simple"
-explicit = true
+[tool.uv.workspace]
+members = ["PyHydroEXA"]

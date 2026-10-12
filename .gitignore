@@ -819,3 +819,6 @@ node_modules/
 *.seed
 *.stamp
 *.timestamp
+
+
+plans
