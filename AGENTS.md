@@ -35,18 +35,30 @@ bash scripts/build_HydroEXA.sh kabreL40S.gpu Debug DOUBLE
 - **Shared logic:** `scripts/lib.sh` (sourced, never executed) provides `print_banner()`,
   `set_machine_env()`, `resolve_paths()`, `preflight()`, and execution guards.
   It replaced the older `print_banner.sh` / `machine_selection.sh` pair.
-- **Output:** `build/HydroEXA`, installed to `install/bin/HydroEXA`.
-- Third-party installs land in `tpl/hdf5/install` and `tpl/amrex/install`.
+- **Output:** all artifacts are namespaced by machine target, because binaries are
+  toolchain- and architecture-specific:
+  - `build_<target>/hydroexa_<PRECISION>/HydroEXA` (build tree)
+  - `install_<target>/hydroexa_<PRECISION>/bin/HydroEXA` (install prefix)
+  - `install_<target>/hdf5` (precision-agnostic, shared per machine)
+  - `install_<target>/amrex_<PRECISION>` (AMReX is precision-specific)
+  - Build trees mirror the install layout under `build_<target>/`.
+- The machine target is the same argument passed to the build script (`kabreL40S.gpu`,
+  `local.gpu`, …), so a shared tree can host several machine builds side by side.
+- AMReX and HydroEXA are keyed by `PRECISION` (`DOUBLE`/`SINGLE`) because `amrex::Real`
+  is fixed at compile time; HDF5 is not, so it is shared. This lets SINGLE and DOUBLE
+  builds coexist and prevents the skip-guards from reusing a mismatched AMReX install.
 
 ### Manual CMake configure (after AMReX is built)
 
 ```bash
-cmake -S . -B build \
-    -DAMReX_ROOT=<amrex_install>/lib/cmake/AMReX \
+cmake -S . -B build_<target>/hydroexa_<PRECISION> \
+    -DHDF5_ROOT=<repo>/install_<target>/hdf5 \
+    -DAMReX_ROOT=<repo>/install_<target>/amrex_<PRECISION>/lib/cmake/AMReX \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_COMPILER=mpicxx
-cmake --build build -j 16
-cmake --install build
+    -DCMAKE_CXX_COMPILER=mpicxx \
+    -DCMAKE_INSTALL_PREFIX=<repo>/install_<target>/hydroexa_<PRECISION>
+cmake --build build_<target>/hydroexa_<PRECISION> -j 16
+cmake --install build_<target>/hydroexa_<PRECISION>
 ```
 
 ### Local development notes (RTX 4070 / Ubuntu 24.04)
@@ -150,7 +162,7 @@ HydroEXACode/
 ## Running
 
 ```bash
-mpirun -np <N> build/HydroEXA inputs
+mpirun -np <N> ../../build_<target>/hydroexa_<PRECISION>/HydroEXA inputs   # run from a test dir
 ```
 
 Run from the test directory (input paths are relative). Test cases:
@@ -201,8 +213,10 @@ The root `pyproject.toml` is a **uv workspace** whose only member is `PyHydroEXA
   sediment/morphodynamic coupling is still in progress.
 - **`kernels/AlternateRoe.H`** is an experimental kernel variant; confirm it is referenced
   before assuming it is active.
-- **Artifacts in tree** (do not treat as source): `build/`, `install/`, `.venv/`,
-  `tpl/*/install`, `logs/`, `tests/*/plotfiles/`, `tests/*/outputs/`, `Backtrace.*`, `err.log`.
+- **Artifacts in tree** (do not treat as source): `build_*/`, `install_*/`, `.venv/`,
+  `logs/`, `tests/*/plotfiles/`, `tests/*/outputs/`, `Backtrace.*`, `err.log`.
+  Third-party *sources* stay in `tpl/`; their builds/installs live under the
+  machine-namespaced directories.
 - This checkout is a **git submodule parent** (`tpl/amrex`); after `git pull` verify
   `git submodule update --init --recursive`.
 - The tree lives on an **sshfs mount**: metadata is slow and inconsistent (odd UIDs,

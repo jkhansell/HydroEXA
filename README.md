@@ -35,21 +35,36 @@ Example:
 bash scripts/build_HydroEXA.sh kabreL40S.gpu Release
 ```
 
-The build script handles a two-stage cascade: AMReX first, then HydroEXA. The executable is installed to `install/bin/HydroEXA`.
+The build script handles a three-stage cascade: HDF5, AMReX, then HydroEXA. All build and
+install artifacts are namespaced by machine target, because the binaries are
+toolchain- and architecture-specific:
+
+```
+build_<machine_target>/{hdf5, amrex_<PRECISION>, hydroexa_<PRECISION>}/     # build trees
+install_<machine_target>/{hdf5, amrex_<PRECISION>, hydroexa_<PRECISION>}/   # install prefixes
+```
+
+HDF5 has no single/double variant, so it is shared per machine. AMReX and HydroEXA
+encode `amrex::Real` at compile time and are keyed by precision, so `DOUBLE` and
+`SINGLE` builds coexist for the same machine.
+
+The executable is installed to
+`install_<machine_target>/hydroexa_<PRECISION>/bin/HydroEXA`.
 
 ### Manual CMake Build
 
 ```bash
 # Configure (after AMReX is built)
-cmake -S . -B build \
+cmake -S . -B build_<machine_target>/hydroexa_<PRECISION> \
     -DHYDROEXA_GPU_BACKEND=<machine_target> \
-    -DAMReX_ROOT=<amrex_install_path> \
+    -DHDF5_ROOT=install_<machine_target>/hdf5 \
+    -DAMReX_ROOT=install_<machine_target>/amrex_<PRECISION>/lib/cmake/AMReX \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_COMPILER=g++
 
 # Build and install
-cmake --build build -j 16
-cmake --install build
+cmake --build build_<machine_target>/hydroexa_<PRECISION> -j 16
+cmake --install build_<machine_target>/hydroexa_<PRECISION>
 ```
 
 ### Machine Profiles
@@ -69,7 +84,7 @@ Machine-specific compiler and GPU settings are stored in `machines/`:
 The executable reads simulation parameters from an inputs file and produces AMReX plotfile output:
 
 ```bash
-mpirun -np <N> install/bin/HydroEXA inputs_file=<path>
+mpirun -np <N> install_<machine_target>/hydroexa_<PRECISION>/bin/HydroEXA inputs_file=<path>
 ```
 
 ## Terrain Representation: StaticTerrain
