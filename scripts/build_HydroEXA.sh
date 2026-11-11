@@ -14,9 +14,6 @@ set -o pipefail
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 source "${SCRIPT_DIR}/lib.sh"
 
-# --- Resolve paths ---
-resolve_paths
-
 # --- Parse arguments ---
 if [ $# -ne 3 ]; then
     echo "Usage: $0 machine.{cpu,gpu} [Release|Debug|...] [DOUBLE|SINGLE]}"
@@ -26,6 +23,18 @@ fi
 TARGET=$1
 BUILD_TYPE=$2
 PRECISION=$3
+
+case "${PRECISION}" in
+    SINGLE|DOUBLE) ;;
+    *)
+        echo "Error: precision must be SINGLE or DOUBLE (got '${PRECISION}')"
+        exit 1
+        ;;
+esac
+export PRECISION
+
+# --- Resolve paths (namespaced by machine target) ---
+resolve_paths "${TARGET}"
 
 # --- Source machine-specific module loads ---
 MACHINE_FILE="${HYDROEXA_DIR}/machines/${TARGET}"
@@ -37,13 +46,27 @@ else
 fi
 
 # --- Export install paths (inherited by all child scripts) ---
-export HDF5_ROOT="${HYDROEXA_DIR}/tpl/hdf5/install"
+# Everything for one machine lives under install_${TARGET}/:
+#   install_${TARGET}/hdf5                 — parallel HDF5 (precision-agnostic)
+#   install_${TARGET}/amrex_${PRECISION}   — AMReX (amrex::Real is build-specific)
+#   install_${TARGET}/hydroexa_${PRECISION} — HydroEXA binary, lib, headers
+# Build trees mirror this under build_${TARGET}/.
+#
+# HDF5 has no single/double build variant, so it is shared per machine.
+# AMReX and HydroEXA encode amrex::Real at compile time, so they must be
+# keyed by precision to allow SINGLE and DOUBLE builds to coexist.
+export HDF5_INSTALL="${INSTALL_ROOT}/hdf5"
+export HDF5_BUILD="${BUILD_ROOT}/hdf5"
+export HDF5_ROOT="${HDF5_INSTALL}"
 export HDF5_HOME="${HDF5_ROOT}"
-export AMREX_ROOT="${AMREX_DIR}/install/lib/cmake/AMReX"
+
+export AMREX_INSTALL="${INSTALL_ROOT}/amrex_${PRECISION}"
+export AMREX_BUILD="${BUILD_ROOT}/amrex_${PRECISION}"
+export AMREX_ROOT="${AMREX_INSTALL}/lib/cmake/AMReX"
 
 export HYDROEXA_SRC=${HYDROEXA_DIR}
-export HYDROEXA_BUILD=${HYDROEXA_DIR}/build
-export HYDROEXA_INSTALL=${HYDROEXA_DIR}/install
+export HYDROEXA_BUILD=${BUILD_ROOT}/hydroexa_${PRECISION}
+export HYDROEXA_INSTALL=${INSTALL_ROOT}/hydroexa_${PRECISION}
 
 
 # --- Step 1: HDF5 ---
@@ -70,7 +93,7 @@ rm -f "${HYDROEXA_BUILD}/CMakeCache.txt"
 cmake -S "${HYDROEXA_SRC}" -B "${HYDROEXA_BUILD}"                         \
     -DHYDROEXA_GPU_BACKEND="${TARGET}"                                    \
     -DHDF5_ROOT="${HDF5_ROOT}"                                            \
-    -DAMReX_ROOT="${AMREX_DIR}/install/lib/cmake/AMReX"                   \
+    -DAMReX_ROOT="${AMREX_ROOT}"                                          \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"                                    \
     -DCMAKE_INSTALL_PREFIX="${HYDROEXA_INSTALL}"                          \
     -DCMAKE_CXX_COMPILER="${CXX}"                                         \

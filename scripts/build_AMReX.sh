@@ -11,15 +11,17 @@ if [[ "${LIB_LOADED:-}" != "1" ]]; then
     exit 1
 fi
 
-build_dir="${AMREX_DIR}/build/"
-install_dir="${AMREX_DIR}/install/"
+# Machine-specific build/install trees are exported by build_HydroEXA.sh.
+# Keep AMReX out of the submodule source tree (tpl/amrex).
+build_dir="${AMREX_BUILD:-${BUILD_ROOT}/amrex_${PRECISION:-DOUBLE}}"
+install_dir="${AMREX_INSTALL:-${INSTALL_ROOT}/amrex_${PRECISION:-DOUBLE}}"
 amrex_config="${install_dir}/lib/cmake/AMReX/AMReXConfig.cmake"
 
 # ---------------------------------------------------------------------------
-# Skip if already installed
+# Skip if already installed for this machine
 # ---------------------------------------------------------------------------
 if [ -f "${amrex_config}" ]; then
-    print_banner "${GREEN}" "AMReX already installed for ${TARGET}"
+    print_banner "${GREEN}" "AMReX already installed at ${install_dir}"
     export AMREX_ROOT="${install_dir}/lib/cmake/AMReX"
     return 0 2>/dev/null
 fi

@@ -63,14 +63,28 @@ trap cleanup_on_fail EXIT
 # ---------------------------------------------------------------------------
 
 # --- Path resolution ---
-# Call resolve_paths() once at the top of any build script.
-# Sets: HYDROEXA_DIR, build_dir, install_dir, AMREX_DIR
-# All variables are exported so child scripts inherit them.
+# Call resolve_paths <machine> once at the top of any build script.
+# Sets: HYDROEXA_DIR, AMREX_DIR, BUILD_ROOT, INSTALL_ROOT
+# Output directories are namespaced by the machine target because HDF5,
+# AMReX and HydroEXA binaries are toolchain- and architecture-specific
+# (CUDA arch, MPI flavour, compiler version).  Sharing them across
+# machines on a common tree silently links the wrong libraries.
 resolve_paths() {
+    local machine="${1:-}"
     export HYDROEXA_DIR="$(git rev-parse --show-toplevel)"
     export AMREX_DIR="${HYDROEXA_DIR}/tpl/amrex"
-    build_dir="${HYDROEXA_DIR}/build"
-    install_dir="${HYDROEXA_DIR}/install"
+
+    if [ -n "${machine}" ]; then
+        export BUILD_ROOT="${HYDROEXA_DIR}/build_${machine}"
+        export INSTALL_ROOT="${HYDROEXA_DIR}/install_${machine}"
+    else
+        export BUILD_ROOT="${HYDROEXA_DIR}/build"
+        export INSTALL_ROOT="${HYDROEXA_DIR}/install"
+    fi
+
+    # Legacy aliases kept for child scripts that still read them.
+    build_dir="${BUILD_ROOT}"
+    install_dir="${INSTALL_ROOT}"
 }
 
 

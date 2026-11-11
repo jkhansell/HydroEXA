@@ -13,12 +13,16 @@ fi
 
 HDF5_SRC="${HYDROEXA_DIR}/tpl/hdf5"
 
+# Machine-specific build/install trees are exported by build_HydroEXA.sh.
+HDF5_BUILD="${HDF5_BUILD:-${BUILD_ROOT}/hdf5}"
+HDF5_INSTALL="${HDF5_INSTALL:-${INSTALL_ROOT}/hdf5}"
+
 # ---------------------------------------------------------------------------
-# Skip if already installed
+# Skip if already installed for this machine
 # ---------------------------------------------------------------------------
-if [ -f "${HDF5_INSTALL:-${HYDROEXA_DIR}/tpl/hdf5/install}/bin/h5pcc" ]; then
-    print_banner "${GREEN}" "HDF5 already installed at ${HDF5_INSTALL:-${HYDROEXA_DIR}/tpl/hdf5/install}"
-    export HDF5_ROOT="${HDF5_INSTALL:-${HYDROEXA_DIR}/tpl/hdf5/install}"
+if [ -f "${HDF5_INSTALL}/bin/h5pcc" ]; then
+    print_banner "${GREEN}" "HDF5 already installed at ${HDF5_INSTALL}"
+    export HDF5_ROOT="${HDF5_INSTALL}"
     export HDF5_HOME="${HDF5_ROOT}"
     return 0 2>/dev/null
 fi
@@ -27,9 +31,6 @@ print_banner "${BLUE}" "Building Parallel HDF5 for ${TARGET}"
 
 # --- Configure ---
 print_banner "${BLUE}" "Configuring HDF5"
-
-HDF5_BUILD="${HYDROEXA_DIR}/tpl/hdf5/build"
-HDF5_INSTALL="${HYDROEXA_DIR}/tpl/hdf5/install"
 
 rm -rf "${HDF5_BUILD}"
 mkdir -p "${HDF5_BUILD}"
