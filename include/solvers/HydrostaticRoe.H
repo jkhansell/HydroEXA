@@ -24,7 +24,8 @@ struct HydrostaticRoe : public BaseSolver<HydrostaticRoe> {
         const amrex::Box& face_box,
         amrex::Array4<amrex::Real const> const& U,
         amrex::Array4<amrex::Real const> const& terrain,
-        amrex::Array4<amrex::Real> const& F,
+        amrex::Array4<amrex::Real> const& FL,
+        amrex::Array4<amrex::Real> const& FR,
         const amrex::Real dt, const amrex::Real dx, const int dir
     );
 

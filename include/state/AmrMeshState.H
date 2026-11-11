@@ -96,6 +96,11 @@ class AmrMeshState : public amrex::AmrCore {
 
         virtual void PostProcessBaseGrids(amrex::BoxArray& box_array) const override;
 
+        // FillPatch variants (public API)
+        void FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
+        void FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
+        void FillPatchEta   (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
+        void ComputeEta(int lev, bool from_U_old = false);
 
         // Accessible to HydroEXA top class
         amrex::Vector<amrex::Real> t_new;
@@ -105,18 +110,19 @@ class AmrMeshState : public amrex::AmrCore {
         amrex::Vector<int> nsubsteps;
         
     private:
-        // Internal helper functions for level management
-        void FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
-        void FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
+
         
-        void FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
-        void FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
-    
+        void FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
+        void FillCoarsePatchEta (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
+        void FillCoarsePatchMomentum (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
+        void FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
+
         void AverageDown (amrex::Vector<amrex::MultiFab>& arr);
         void AverageDownTo(int crse_lev, amrex::Vector<amrex::MultiFab>& arr);
         
         void GetData(int lev, amrex::Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime);
         void GetTerrainData(int lev, amrex::Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime);
+        void GetEtaData(int lev, amrex::Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime);
         
         void TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrain);
         void FluidMapStaticToDynamic(int lev);
@@ -137,6 +143,8 @@ class AmrMeshState : public amrex::AmrCore {
         // These are the core state variables that evolve in time and are stored at each AMR level. They are resized and redefined as levels are created or destroyed.
         amrex::Vector<amrex::MultiFab> U_new;
         amrex::Vector<amrex::MultiFab> U_old;
+        amrex::Vector<amrex::MultiFab> Eta;       // Eta_new — current free surface
+        amrex::Vector<amrex::MultiFab> Eta_old;   // Eta from previous coarse step
         amrex::Vector<amrex::MultiFab> DynamicTerrain;
         
         mutable std::vector<int> pure_fluid_boxes;
@@ -144,6 +152,7 @@ class AmrMeshState : public amrex::AmrCore {
         
         // Boundary conditions
         amrex::Vector<amrex::BCRec> U_bcs;        // Per-component mathematical BCRecs
+        amrex::Vector<amrex::BCRec> Eta_bcs;      // Per-component mathematical BCRecs
         amrex::Vector<amrex::BCRec> Terrain_bcs;  // Per-component mathematical BCRecs
 
         // --- Static Database State ---

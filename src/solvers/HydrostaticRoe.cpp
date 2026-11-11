@@ -44,16 +44,16 @@ HydrostaticRoe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
                     amrex::Real h = arr(i,j,k,0);
                     amrex::Real dt_cell = 1.e6; 
                     
-                    if (h > 1.e-12) { 
+                    if (h > Tolerances::TOL12()) { 
                         amrex::Real u = arr(i,j,k,1) / h;
                         amrex::Real v = arr(i,j,k,2) / h;
-                        // Fixed: Correct namespace resolution for GRAV
                         amrex::Real c = std::sqrt(PhysConstants::GRAV() * h); 
 
-                        amrex::Real dt_x = dxx / (std::abs(u) + c);
-                        amrex::Real dt_y = dyy / (std::abs(v) + c);
+                        // Unsplit 2D CFL: dt*(|u|+c)/dx + dt*(|v|+c)/dy <= 1.
+                        const amrex::Real speed_x = std::abs(u) + c;
+                        const amrex::Real speed_y = std::abs(v) + c;
 
-                        dt_cell = amrex::min(dt_x, dt_y);
+                        dt_cell = 1.0 / (speed_x / dxx + speed_y / dyy);
                     }
                     return dt_cell;
                 }
@@ -92,8 +92,11 @@ void HydrostaticRoe::tag_cells_Impl(amrex::TagBoxArray& tags,
 
         amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
             // Check NODATA bounds (-9999.0)
-            if (z_arr(i+1,j,k,0) == -9999.0 || z_arr(i-1,j,k,0) == -9999.0 ||
-                z_arr(i,j+1,k,0) == -9999.0 || z_arr(i,j-1,k,0) == -9999.0) {
+            const amrex::Real nod = Tolerances::TOL10();
+            if (std::abs(z_arr(i+1,j,k,0) + 9999.0) < nod ||
+                std::abs(z_arr(i-1,j,k,0) + 9999.0) < nod ||
+                std::abs(z_arr(i,j+1,k,0) + 9999.0) < nod ||
+                std::abs(z_arr(i,j-1,k,0) + 9999.0) < nod) {
                 return;
             }
 
@@ -117,7 +120,7 @@ void HydrostaticRoe::tag_cells_Impl(amrex::TagBoxArray& tags,
                     amrex::Real h  = u_arr(ii,jj,kk,0);
                     amrex::Real hu = u_arr(ii,jj,kk,1);
                     amrex::Real hv = u_arr(ii,jj,kk,2);
-                    if (h < eps) return 0.0;
+                    if (h < eps) return amrex::Real(0.0);
                     amrex::Real u = hu / h;
                     amrex::Real v = hv / h;
                     return std::sqrt(u*u + v*v);
@@ -133,6 +136,14 @@ void HydrostaticRoe::tag_cells_Impl(amrex::TagBoxArray& tags,
 
                 if (std::sqrt(dudx*dudx + dudy*dudy) > u_thresh) {
                     tag_cell = true;
+                }
+                
+                if (time <= 1.0e-8){
+                    amrex::Real dzdx = (z_arr(i+1,j,k,0) - z_arr(i-1,j,k,0)) / (2.0 * dx[0]);
+                    amrex::Real dzdy = (z_arr(i,j+1,k,0) - z_arr(i,j-1,k,0)) / (2.0 * dx[1]);
+                    if (std::sqrt(dzdx*dzdx + dzdy*dzdy) > z_thresh) {
+                        tag_cell = true;
+                    }
                 }
             }
 
@@ -159,7 +170,7 @@ amrex::Real vanLeerSlope(
     const amrex::Real dp = qip1 - qi;
 
     if (std::abs(dp) <= Tolerances::TOL12()) {
-        return 0.0;
+        return amrex::Real(0.0);
     }
 
     const amrex::Real r = dm / dp;
@@ -172,7 +183,8 @@ HydrostaticRoe::compute_amrex_effective_fluxes(
     const amrex::Box& face_box,
     amrex::Array4<amrex::Real const> const& U,
     amrex::Array4<amrex::Real const> const& terrain,
-    amrex::Array4<amrex::Real> const& F,
+    amrex::Array4<amrex::Real> const& FL,
+    amrex::Array4<amrex::Real> const& FR,
     const amrex::Real dt,
     const amrex::Real dx,
     const int dir)
@@ -205,6 +217,16 @@ HydrostaticRoe::compute_amrex_effective_fluxes(
 
             const amrex::Real zL = terrain(li, lj, k, 0);
             const amrex::Real zR = terrain(ri, rj, k, 0);
+
+            // NODATA acts as an impermeable wall: no flux crosses such a face.
+            if (std::abs(zL + 9999.0) < Tolerances::TOL10() ||
+                std::abs(zR + 9999.0) < Tolerances::TOL10()) {
+                for (int c = 0; c < 3; ++c) {
+                    FL(i, j, k, c) = 0.0;
+                    FR(i, j, k, c) = 0.0;
+                }
+                return;
+            }
 
             const amrex::Real zf = std::max(zL, zR);
 
@@ -303,20 +325,27 @@ HydrostaticRoe::compute_amrex_effective_fluxes(
             }
 
             // ---------------------------------------------------------
-            // Hydrostatic reconstruction
+            // Hydrostatic reconstruction (Audusse et al.)
+            //
+            // The face depth is capped by the face bathymetry zf. The
+            // uncapped face depth of each cell is kept so that the
+            // hydrostatic pressure correction can be applied below.
             // ---------------------------------------------------------
 
-            const amrex::Real hLf = std::max(Tolerances::TOLDRY(), etaLf - zf);
-            const amrex::Real hRf = std::max(Tolerances::TOLDRY(), etaRf - zf);
+            const amrex::Real hLf_unc = std::max(amrex::Real(0.0), etaLf - zL);
+            const amrex::Real hRf_unc = std::max(amrex::Real(0.0), etaRf - zR);
 
-            const amrex::Real huLf = hLf * uLf;
-            const amrex::Real hvLf = hLf * vLf;
+            const amrex::Real hLf = std::max(amrex::Real(0.0), etaLf - zf);
+            const amrex::Real hRf = std::max(amrex::Real(0.0), etaRf - zf);
 
-            const amrex::Real huRf = hRf * uRf;
-            const amrex::Real hvRf = hRf * vRf;
+            const amrex::Real huLf = (hLf > 0.0) ? hLf * uLf : 0.0;
+            const amrex::Real hvLf = (hLf > 0.0) ? hLf * vLf : 0.0;
+
+            const amrex::Real huRf = (hRf > 0.0) ? hRf * uRf : 0.0;
+            const amrex::Real hvRf = (hRf > 0.0) ? hRf * vRf : 0.0;
 
             // ---------------------------------------------------------
-            // Homogeneous Roe
+            // Homogeneous Roe on the reconstructed states
             // ---------------------------------------------------------
 
             amrex::Real flux[3] = {};
@@ -327,9 +356,28 @@ HydrostaticRoe::compute_amrex_effective_fluxes(
                 flux,
                 dt, dx, nx, ny);
 
-            F(i, j, k, 0) = flux[0];
-            F(i, j, k, 1) = flux[1];
-            F(i, j, k, 2) = flux[2];
+            // ---------------------------------------------------------
+            // Dual effective fluxes: hydrostatic pressure correction
+            //
+            //   F_L = F_roe + (0, g/2 (h_L,unc^2 - h_L*^2), 0)
+            //   F_R = F_roe + (0, g/2 (h_R,unc^2 - h_R*^2), 0)
+            //
+            // The correction is a normal-momentum flux, so it is rotated
+            // back into global coordinates with (nx, ny).
+            // ---------------------------------------------------------
+
+            const amrex::Real pressL =
+                0.5 * PhysConstants::GRAV() * (hLf_unc * hLf_unc - hLf * hLf);
+            const amrex::Real pressR =
+                0.5 * PhysConstants::GRAV() * (hRf_unc * hRf_unc - hRf * hRf);
+
+            FL(i, j, k, 0) = flux[0];
+            FL(i, j, k, 1) = flux[1] + pressL * nx;
+            FL(i, j, k, 2) = flux[2] + pressL * ny;
+
+            FR(i, j, k, 0) = flux[0];
+            FR(i, j, k, 1) = flux[1] + pressR * nx;
+            FR(i, j, k, 2) = flux[2] + pressR * ny;
         });
 }
 
@@ -370,15 +418,21 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
     // ------------------------------------------------------------------------
     // 2. ALLOCATE DUAL EFFECTIVE FLUXES (FL and FR)
     // ------------------------------------------------------------------------
-    amrex::MultiFab F[AMREX_SPACEDIM];
+    // Two effective fluxes per face: FL is the flux seen by the cell on the
+    // left of the face, FR the one seen by the cell on the right. They differ
+    // only by the hydrostatic pressure correction and coincide on a flat bed.
+    amrex::MultiFab FL[AMREX_SPACEDIM];
+    amrex::MultiFab FR[AMREX_SPACEDIM];
     amrex::MultiFab U_ext, Terrain_ext;
 
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
     {
         amrex::BoxArray ba = ctx.grids[lev];
         ba.surroundingNodes(dir);
-        F[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-        F[dir].setVal(0.0);
+        FL[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+        FR[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+        FL[dir].setVal(0.0);
+        FR[dir].setVal(0.0);
     }
 
     // MUSCL reconstruction and flux calculation need 2 ghosts
@@ -413,7 +467,8 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
                 amrex::Real ds = (dir == 0) ? dx_local : dy_local; 
                 compute_amrex_effective_fluxes(
                     face_box, statein, z_arr,
-                    F[dir].array(mfi),
+                    FL[dir].array(mfi),
+                    FR[dir].array(mfi),
                     dt_local, ds, dir
                 );
             }
@@ -433,8 +488,10 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
             const int ncomp = U_o.nComp();
             const amrex::Box& bx = mfi.tilebox();
 
-            auto const& F_x = F[0].array(mfi);
-            auto const& F_y = F[1].array(mfi);
+            auto const& FL_x = FL[0].array(mfi);
+            auto const& FR_x = FR[0].array(mfi);
+            auto const& FL_y = FL[1].array(mfi);
+            auto const& FR_y = FR[1].array(mfi);
 
             auto const& u_o = U_o.array(mfi);
             auto const& u_n = U_n.array(mfi);
@@ -445,11 +502,14 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
             {
                 for (int comp = 0; comp < ncomp; ++comp)
                 {
+                    // Right face uses FL (left-cell flux), left face uses FR
+                    // (right-cell flux). This is what makes the scheme
+                    // well-balanced on a sloping bed.
                     u_n(i,j,k,comp) = u_o(i,j,k,comp)
                         - (dt_local / dx_local)
-                            * (F_x(i+1,j,k,comp) - F_x(i,j,k,comp))
+                            * (FL_x(i+1,j,k,comp) - FR_x(i,j,k,comp))
                         - (dt_local / dy_local)
-                            * (F_y(i,j+1,k,comp) - F_y(i,j,k,comp));
+                            * (FL_y(i,j+1,k,comp) - FR_y(i,j,k,comp));
                 }
 
                 const amrex::Real h = u_n(i,j,k,0);
@@ -482,8 +542,14 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
                         u_n(i,j,k,2) = hv * factor;
                     }
                 }
-
-                
+                else
+                {
+                    // Dry / negative-depth safety: remove the water and its
+                    // momentum instead of letting h go negative.
+                    u_n(i,j,k,0) = std::max(h, amrex::Real(0.0));
+                    u_n(i,j,k,1) = 0.0;
+                    u_n(i,j,k,2) = 0.0;
+                }
             });
         }
     }
@@ -493,6 +559,21 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
     // 5. PREPARE AND SYNCHRONIZE WITH FLUX REGISTERS
     // ------------------------------------------------------------------------
     if (ctx.do_reflux) {
+        // Reflux needs a single conservative interface flux. Use the mean of
+        // the two effective fluxes: they are identical on a flat bed and
+        // differ only by the hydrostatic pressure correction.
+        amrex::MultiFab Freg[AMREX_SPACEDIM];
+        for (int idim = 0; idim < AMREX_SPACEDIM; ++idim)
+        {
+            amrex::BoxArray ba = ctx.grids[lev];
+            ba.surroundingNodes(idim);
+            Freg[idim].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
+            amrex::MultiFab::LinComb(Freg[idim],
+                                     0.5, FL[idim], 0,
+                                     0.5, FR[idim], 0,
+                                     0, U_n.nComp(), 0);
+        }
+
         // Send mapped boundary fluxes to AMReX FluxRegisters
         if (fr_as_crse)
         {
@@ -500,7 +581,7 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
             {
                 const amrex::Real dA = (idim == 0) ? dy : dx;
                 const amrex::Real scale = -dt*dA;
-                fr_as_crse->CrseInit(F[idim], idim, 0, 0, U_n.nComp(), scale,
+                fr_as_crse->CrseInit(Freg[idim], idim, 0, 0, U_n.nComp(), scale,
                                     amrex::FluxRegister::COPY);
             }
         }
@@ -511,7 +592,7 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
             {
                 const amrex::Real dA = (idim == 0) ? dy : dx;
                 const amrex::Real scale = dt*dA;
-                fr_as_fine->FineAdd(F[idim], idim, 0, 0, U_n.nComp(), scale);
+                fr_as_fine->FineAdd(Freg[idim], idim, 0, 0, U_n.nComp(), scale);
             }
         }
     }

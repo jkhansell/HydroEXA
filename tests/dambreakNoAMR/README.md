@@ -7,14 +7,15 @@ This test case is designed specifically for **debugging Riemann solver fluxes**.
 ## Setup
 
 ```bash
-cd HydroEXA/tests/dambreak
+cd HydroEXACode/tests/dambreakNoAMR
 
 # Generate the HDF5 input file (requires h5py + numpy)
 uv run python make_test_h5.py
 
-# Run the simulation
-cmake --build build --target HydroEXA
-mpirun -np 4 ./build/HydroEXA inputs
+# Build once from the repository root:
+#   bash scripts/build_HydroEXA.sh <machine_target> Release DOUBLE
+# Then run the simulation:
+mpirun -np 4 ../../build_<machine_target>/hydroexa_<PRECISION>/HydroEXA inputs
 ```
 
 ## Test Case Parameters

@@ -21,12 +21,20 @@ struct Roe : public BaseSolver<Roe> {
 
     void compute_amrex_effective_fluxes(
         const amrex::Box& face_box,
-        amrex::Array4<amrex::Real const> const& U,
+        amrex::Array4<amrex::Real> const& U,
+        amrex::Array4<amrex::Real const> const& Eta,
         amrex::Array4<amrex::Real const> const& terrain,
         amrex::Array4<amrex::Real> const& F,
         amrex::Array4<amrex::Real> const& S_minus,
         amrex::Array4<amrex::Real> const& S_plus,
         const amrex::Real dt, const amrex::Real dx, const int dir
+    );
+
+    void reconstruct_h_from_eta(
+        const amrex::Box& cell_box,
+        amrex::Array4<amrex::Real> const& U,
+        amrex::Array4<amrex::Real const> const& Eta,
+        amrex::Array4<amrex::Real const> const& terrain
     );
 
     amrex::Real compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,

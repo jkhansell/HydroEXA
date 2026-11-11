@@ -11,6 +11,32 @@ void AmrMeshState::GetTerrainData(int lev, amrex::Real time, amrex::Vector<amrex
     datatime.push_back(t_new[lev]);
 }
 
+void AmrMeshState::GetEtaData(int lev, amrex::Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime) {
+    data.clear();
+    datatime.clear();
+
+    const amrex::Real teps = (t_new[lev] - t_old[lev]) * 1.e-3;
+
+    if (time > t_new[lev] - teps && time < t_new[lev] + teps)
+    {
+        data.push_back(&Eta[lev]);
+        datatime.push_back(t_new[lev]);
+    }
+    else if (time > t_old[lev] - teps && time < t_old[lev] + teps)
+    {
+        data.push_back(&Eta_old[lev]);
+        datatime.push_back(t_old[lev]);
+    }
+    else
+    {
+        data.push_back(&Eta_old[lev]);
+        data.push_back(&Eta[lev]);
+        datatime.push_back(t_old[lev]);
+        datatime.push_back(t_new[lev]);
+    }
+}
+
+
 void AmrMeshState::GetData(int lev, amrex::Real time, amrex::Vector<amrex::MultiFab*>& data, amrex::Vector<amrex::Real>& datatime) {
     data.clear();
     datatime.clear();
@@ -61,6 +87,7 @@ SolverContext AmrMeshState::GetSolverContext()
         
         U_new,
         U_old,
+        Eta,
         DynamicTerrain,
 
         //==========================================================================
@@ -85,6 +112,7 @@ SolverContext AmrMeshState::GetSolverContext()
 
         U_bcs,
         Terrain_bcs,
+        Eta_bcs, 
 
         //==========================================================================
         // Refluxing
@@ -119,6 +147,17 @@ SolverContext AmrMeshState::GetSolverContext()
             int ncomp)
         {
             FillPatchTerrain(lev,time,mf,bc,icomp,ncomp);
+        },
+
+        [this](
+            int lev,
+            amrex::Real time,
+            amrex::MultiFab& mf,
+            const amrex::Vector<amrex::BCRec>& bc,
+            int icomp,
+            int ncomp)
+        {
+            FillPatchEta(lev,time,mf,bc,icomp,ncomp);
         },
 
         [](const amrex::MultiFab& mf,

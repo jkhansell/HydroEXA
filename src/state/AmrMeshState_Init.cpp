@@ -44,6 +44,7 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
     const auto& period = Geom()[0].periodicity();
     
     U_bcs.resize(ncomp_U);
+    Eta_bcs.resize(1);
     Terrain_bcs.resize(ncomp_Terrain);
 
     // 4. Map physical BC types to mathematical BCRecs per component
@@ -54,6 +55,8 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
     SetXVelocityBC(U_bcs[1], physics_p.bc_params);
     // Component 2 (hv): y-velocity (tangential in x-dir, normal in y-dir)
     SetYVelocityBC(U_bcs[2], physics_p.bc_params);
+
+    SetScalarBC(Eta_bcs[0], physics_p.bc_params);
 
     // 5. Terrain BCs (scalar for both bathymetry and roughness)
     BCParams terrain_bc_params;
@@ -70,6 +73,8 @@ AmrMeshState::AmrMeshState(std::shared_ptr<IOHandler> io_handler,
 void AmrMeshState::ResizeLevels(int nlevs) {
     U_new.resize(nlevs);
     U_old.resize(nlevs);
+    Eta.resize(nlevs);
+    Eta_old.resize(nlevs);
     DynamicTerrain.resize(nlevs);
 
     t_new.resize(nlevs);

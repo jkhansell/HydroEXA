@@ -15,12 +15,12 @@ struct HDF5SpatialMetadata
 {
     int global_nx = 0;
     int global_ny = 0;
-    double dx = 1.0;
-    double dy = 1.0;
-    double prob_lo_x = 0.0;
-    double prob_lo_y = 0.0;
-    double prob_hi_x = 1.0;
-    double prob_hi_y = 1.0;
+    amrex::Real dx = 1.0;
+    amrex::Real dy = 1.0;
+    amrex::Real prob_lo_x = 0.0;
+    amrex::Real prob_lo_y = 0.0;
+    amrex::Real prob_hi_x = 1.0;
+    amrex::Real prob_hi_y = 1.0;
 };
 
 class IOHandler
@@ -67,7 +67,7 @@ public:
         const amrex::Vector<amrex::MultiFab> &U,
         const amrex::Vector<amrex::MultiFab> &Terrain,
         int iteration,
-        double time,
+        amrex::Real time,
         const amrex::Vector<amrex::Geometry> &geom,
         const amrex::Vector<amrex::IntVect> &ref_ratio,
         int finest_level);

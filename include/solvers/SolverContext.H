@@ -21,6 +21,7 @@ struct SolverContext
 
     amrex::Vector<amrex::MultiFab>& U_new;
     amrex::Vector<amrex::MultiFab>& U_old;
+    amrex::Vector<amrex::MultiFab>& Eta;
     amrex::Vector<amrex::MultiFab>& Terrain;
 
     amrex::Vector<amrex::Real> t_new;
@@ -42,6 +43,7 @@ struct SolverContext
 
     const amrex::Vector<amrex::BCRec>& UBCs;
     const amrex::Vector<amrex::BCRec>& TerrainBCs;
+    const amrex::Vector<amrex::BCRec>& EtaBCs;
 
     //==========================================================================
     // Refluxing
@@ -71,6 +73,14 @@ struct SolverContext
         const amrex::Vector<amrex::BCRec>&,
         int,
         int)> FillPatchTerrain;
+
+    std::function<void(
+        int,
+        amrex::Real,
+        amrex::MultiFab&,
+        const amrex::Vector<amrex::BCRec>&,
+        int,
+        int)> FillPatchEta;
 
     std::function<amrex::iMultiFab(
         const amrex::MultiFab&,

@@ -67,6 +67,11 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
 
         // Average down covered coarse cells from fine grid
         AverageDownTo(lev, U_new);
+
+        // Reflux and averaging down both modify the coarse state, so the free
+        // surface must be rebuilt before this level is used as a coarse source
+        // for the next subcycled step.  No swap happened, so read from U_new.
+        ComputeEta(lev, false);
     }
 }
 
@@ -78,7 +83,18 @@ void AmrMeshState::AdvanceLevel(int lev, amrex::Real time, amrex::Real dt)
 {
     BL_PROFILE("AmrMeshState::AdvanceLevel");
 
+    // Save current Eta to Eta_old before compute_fluxes (which swaps U_new/U_old).
+    // This enables GetEtaData to time-interpolate coarse Eta for fine-level FillPatch.
+    amrex::MultiFab::Copy(Eta_old[lev], Eta[lev], 0, 0, 1, 0);
+
     SolverContext ctx = GetSolverContext();
 
     solver.compute_fluxes(ctx, lev, dt, time);
+
+    // Eta = h + z is a live state variable.  Refresh it from the updated
+    // conserved state so that finer levels (which FillPatch it) and the
+    // eta-based depth reconstruction always see the current free surface.
+    // compute_fluxes_Impl swaps U_new/U_old by reference, so after the call
+    // U_new holds the updated state (t^{n+1}).
+    ComputeEta(lev, false);
 }

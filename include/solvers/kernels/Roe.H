@@ -139,12 +139,12 @@ void roeSolver(
         const amrex::Real denom3 = hj - h_j3star;
         const amrex::Real denom3_safe = (std::abs(denom3) > Tolerances::TOL12()) ? denom3 : (denom3 >= 0.0 ? Tolerances::TOL12() : -Tolerances::TOL12());
 
-        const double dt1star = (dx * 0.5 / lambda0_safe) * (hi / denom1_safe);
-        const double dt3star = (dx * 0.5 / lambda2_safe) * (hj / denom3_safe);
+        const amrex::Real dt1star = (dx * 0.5 / lambda0_safe) * (hi / denom1_safe);
+        const amrex::Real dt3star = (dx * 0.5 / lambda2_safe) * (hj / denom3_safe);
 
         if ((h_i1star < -Tolerances::TOLDRY()) && (h_j3star > Tolerances::TOLDRY()) && (dt1star < loc_dt)) {
-            const double beta1min = -(hi + alpha0) * std::abs(lambda0);
-            const double beta3min = -(hj - alpha2) * lambda2;
+            const amrex::Real beta1min = -(hi + alpha0) * std::abs(lambda0);
+            const amrex::Real beta3min = -(hj - alpha2) * lambda2;
 
             if (-beta1min >= beta3min) {
                 beta0 = beta1min;
@@ -153,8 +153,8 @@ void roeSolver(
         }
 
         if ((h_i1star > Tolerances::TOLDRY()) && (h_j3star < -Tolerances::TOLDRY()) && (dt3star < loc_dt)) {
-            const double beta1min = -(hi + alpha0) * std::abs(lambda0);
-            const double beta3min = -(hj - alpha2) * lambda2;
+            const amrex::Real beta1min = -(hi + alpha0) * std::abs(lambda0);
+            const amrex::Real beta3min = -(hj - alpha2) * lambda2;
 
             if (-beta3min >= beta1min) {
                 beta2 = beta3min;

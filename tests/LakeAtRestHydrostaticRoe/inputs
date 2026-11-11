@@ -19,7 +19,7 @@ HydroEXA.cfl               = 0.5
 
 HydroEXA.h_grad_thresh     = 0.015 0.0175 0.02 0.015
 HydroEXA.umag_grad_thresh  = 0.015 0.0175 0.02 0.015
-HydroEXA.z_grad_thresh     = 0.015 0.0175 0.02 0.015
+HydroEXA.z_grad_thresh     = 0.00005 0.00007 0.02 0.015
 HydroEXA.mass_diag_freq    = 1000
 
 # =====================================================================
@@ -43,7 +43,7 @@ amr.do_subcycle            = 1
 amr.blocking_factor        = 16
 amr.v                      = 1
 
-amr.terrain_ref_lev        = 2
+amr.terrain_ref_lev        = 1
 
 amr.ref_ratio              = 2 2 2 2
 

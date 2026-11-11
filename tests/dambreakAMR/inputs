@@ -36,16 +36,16 @@ HydroEXA.hi_bc         =  1 0   # X_BC, Y_BC
 # =====================================================================
 # AMR RUNTIME ADAPTIVITY CONFIGURATION
 # =====================================================================
-amr.max_level              = 2       # Two level AMR for this test
-amr.regrid_int             = 10
-amr.do_reflux              = 0
+amr.max_level              = 1       # Two level AMR for this test
+amr.regrid_int             = 50
+amr.do_reflux              = 1
 amr.do_subcycle            = 1
-amr.blocking_factor        = 16
+amr.blocking_factor        = 32
 amr.v                      = 1
 
-amr.terrain_ref_lev        = 2
+amr.terrain_ref_lev        = 1
 
-amr.ref_ratio              = 2 2 2 2
+amr.ref_ratio              = 2 2 2
 
 # =====================================================================
 # SYSTEM PARALLEL DATA / INPUT OUTPUT MANAGEMENT

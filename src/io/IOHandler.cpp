@@ -315,7 +315,7 @@ void IOHandler::WritePlotfile(
     const amrex::Vector<amrex::MultiFab> &U,
     const amrex::Vector<amrex::MultiFab> &Terrain,
     int iteration,
-    double time,
+    amrex::Real time,
     const amrex::Vector<amrex::Geometry> &geom,
     const amrex::Vector<amrex::IntVect> &ref_ratio,
     int finest_level)
