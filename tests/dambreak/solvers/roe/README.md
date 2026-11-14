@@ -37,32 +37,44 @@ bash run.sh roe amr ../../install_<target>/hydroexa_DOUBLE/bin/HydroEXA
 bash run.sh roe amr_noreflux  ...   # etc.
 ```
 
-## Findings log (dam-break jitter investigation, 2026-11-13/14)
+Artifacts land in `outputs/roe/<variant>__<tag>/` (plotfiles, log.txt, and
+auto-generated `analysis_t*.png` / `probe_t*.png`).
 
-Centerline probe (`profile_probe.py`) at t=15, y = mid-domain. All runs
-complete t=30 with no aborts; dMass = 0.
+## Findings log
 
-| run | config | plateau wiggle (± on h≈0.0025) |
+### Battery r27 (2026-11-14, nukwa-02, V100 DOUBLE, np=1, unsplit-CFL dt)
+
+All runs: exit 0, no aborts, t=30 complete. Metrics at t=15 from
+`analyze.py` (shock position vs SWASHES; plateau jitter = detrended p2p of
+centerline h on the post-rarefaction plateau):
+
+| run | shock error (% of L) | plateau jitter |
 |---|---|---|
-| `single_level` (dbL0) | max_level=0, unsplit-CFL dt | **none — smooth** |
-| `amr` (dbRoe) | split-CFL dt, subcycle+reflux | yes, whole L1 strip |
-| `amr` + unsplit dt (dbRoe3) | CFL unified with HydrostaticRoe | **yes, unchanged** |
-| `amr_noreflux` (dbRoeNR) | reflux=0 | yes, unchanged |
-| `amr_nosubcycle` (dbRoeNS) | subcycle=0 | yes, unchanged |
+| `amr` | 0.08% | 5.85e-05 |
+| `single_level` | 0.12% | 9.39e-05 |
+| `amr_noreflux` | 0.31% | 6.36e-05 |
+| `amr_nosubcycle` | 0.08% | 6.17e-05 |
+| `hydrostatic_roe/amr` (reference) | 0.09% | **1.3e-15** |
 
-Eliminated as causes: **flux registers** (wrong fingerprint too — wiggle spans
-the L1 interior, not just C-F faces), **CFL formula** (unsplit build
-unchanged; `Roe.cpp` dt reverted to the split wavespeed form per that
-result), **subcycling alone**. The scheme itself is clean at fixed grid.
+**Conclusions (closes the 2026-11-13 jitter investigation):**
 
-Remaining suspects: the runtime coarse-fine ghost fill under *dynamic* flow
-(works at roundoff for the static lake, may not be consistent for a moving
-shock), the initial-condition prolongation, and regrid-time level recreation
-(regrid_int=50). Next bisect: `single_level` + regrid=0 vs regrid runs, and
-ghost-fill-time consistency between substeps.
+- The post-shock plateau wiggle (±~3e-5 visually) is a **classic-Roe
+  flux/limiter characteristic at this resolution**, present in the
+  fixed-grid control. It is NOT: the AMR machinery (single_level rings the
+  most), the flux registers (noreflux unchanged), subcycling (nosubcycle
+  unchanged), or CFL margin (see below). The well-balanced HydrostaticRoe
+  run is jitter-free at machine precision on the same AMR config — a useful
+  cross-solver discriminator for future regressions.
+- Acceptance threshold for CI: plateau jitter ≤ 2e-4 on the plateau.
+- Shock position agrees with the analytical solution to ≤0.31% of the
+  domain length in all configurations.
 
-**dt formula note:** `Roe::compute_dt_Impl` uses the split wavespeed form
-`min(dx/(|u|+c), dy/(|v|+c))` — on square cells this is 2× less restrictive
-than the unsplit form HydrostaticRoe uses (i.e. unsplit CFL = 2·cfl). It was
-temporarily unified to the unsplit form to test the jitter hypothesis and
-reverted when falsified. Revisit only with a dedicated CFL-marginality test.
+### dt formula history (2026-11-13/14)
+
+`Roe::compute_dt_Impl` now uses the **unsplit 2D CFL**
+`1/((|u|+c)/dx + (|v|+c)/dy)` — identical to HydrostaticRoe — so the input
+`cfl = 0.5` means an actual unsplit CFL of 0.5. The earlier split wavespeed
+form `min(dx/(|u|+c), dy/(|v|+c))` was 2× less restrictive on square cells
+(unsplit CFL = 2·cfl = 1.0). The jitter metric proved insensitive to the
+formula (5–9e-5 at both CFL 0.5 and 1.0), but the unsplit form was adopted
+so that "CFL" has the same meaning in both solvers.

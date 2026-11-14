@@ -117,21 +117,22 @@ Artifacts land in `outputs/<solver>/`:
 1. **No abort** — exit status 0; the dt-collapse `Abort` must never fire.
 2. **Conservation** — `[Conservation]` lines: `dMass` within roundoff;
    total momentum smooth (shock speed consistent with the plateau state).
-3. **Analytical agreement** — shock and rarefaction positions match the
-   SWASHES exact solution within a tolerance set by resolution (to be
-   quantified once the battery is stable).
-4. **Plateau smoothness** — no coherent oscillation train on the
-   post-shock plateau (the currently-open jitter issue, see
-   `solvers/roe/README.md`).
+3. **Analytical agreement** — shock position within 0.5% of the domain
+   length; profile L1 error of the same order as the `single_level`
+   control.
+4. **Plateau smoothness** — detrended plateau jitter ≤ 2e-4 (current
+   classic-Roe baseline is 5–9e-5; HydrostaticRoe achieves 1e-15).
 
 ## Status / known issues
 
-- **Jitter investigation (open):** AMR runs show a ±~3e-5 oscillation train
-  on the post-shock plateau that the `single_level` control does not.
-  Bisected so far: NOT the flux registers (`noreflux` unchanged), NOT the
-  CFL formula (unsplit-dt build unchanged → Roe reverted to split form),
-  NOT subcycling alone (`nosubcycle` unchanged), NOT the scheme itself
-  (L0 smooth). Details and evidence table in `solvers/roe/README.md`.
+- **Jitter investigation (CLOSED 2026-11-14):** the post-shock plateau
+  wiggle (~5–9e-5 detrended p2p) is a classic-Roe flux/limiter
+  characteristic at this resolution — present in the fixed-grid control
+  (`single_level`), insensitive to reflux, subcycling, and CFL margin
+  (0.5 vs 1.0). The HydrostaticRoe solver shows machine-precision
+  jitter (1.3e-15) on the same AMR config. CI acceptance threshold:
+  plateau jitter ≤ 2e-4; shock position ≤ 0.5% of L. Full evidence
+  table in `solvers/roe/README.md`.
 - `tests/dambreakNoAMR/` (legacy) is a **different problem** (51.2 × 1.6
   domain) — not a valid control for this battery; `solvers/*/inputs_single_level`
   replaces it as the fixed-grid reference.
