@@ -56,15 +56,13 @@ STATUS=${PIPESTATUS[0]}
 rm -f "${RUNCFG}"
 echo "${SOLVER}/${VARIANT} exit status: ${STATUS}"
 
-# Analyze the LAST plotfile if any were written.
-# NOTE on plotfile selection: io writes rotation backups as plt####.old.NNN
-# and plotfile numbers do NOT map linearly to time (io.plot_freq is a TIME
-# interval). Filter the .old files with grep -v 'old', and let analysis.py
-# name outputs by the ACTUAL simulation time read from the plotfile.
-LAST=$(ls -d "${RUNDIR}"/plt* 2>/dev/null | grep -v 'old' | sort | tail -1)
-if [ -n "${LAST}" ]; then
-    uv run python analysis.py "${LAST}" || true
-fi
+# Render analysis figures for ALL plotfiles (grep -v old filters the plt####.old.NNN
+# rotation backups; plotfile numbers do NOT map linearly to time, and analysis.py
+# names outputs by the ACTUAL simulation time read from each plotfile).
+for PLT in $(ls -d "${RUNDIR}"/plt* 2>/dev/null | grep -v old | sort); do
+    echo "--- analysis: ${PLT}"
+    uv run python analysis.py "${PLT}" 2>&1 | grep -E '^time|shock position|jitter|wrote' || true
+done
 
 echo "${RUNDIR}" > /tmp/dambreak_last_rundir
 exit "${STATUS}"

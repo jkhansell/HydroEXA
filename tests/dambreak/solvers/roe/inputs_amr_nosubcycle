@@ -51,7 +51,7 @@ amr.ref_ratio              = 2 2 2
 # SYSTEM PARALLEL DATA / INPUT OUTPUT MANAGEMENT
 # ====================================================================
 io.chk_freq                = 10000
-io.plot_freq               = 5
+io.plot_freq               = 1
 io.chk_type                = HDF5
 io.async_io                = 1
 

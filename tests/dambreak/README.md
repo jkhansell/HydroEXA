@@ -125,14 +125,17 @@ Artifacts land in `outputs/<solver>/`:
 
 ## Status / known issues
 
-- **Jitter investigation (CLOSED 2026-11-14):** the post-shock plateau
-  wiggle (~5–9e-5 detrended p2p) is a classic-Roe flux/limiter
-  characteristic at this resolution — present in the fixed-grid control
-  (`single_level`), insensitive to reflux, subcycling, and CFL margin
-  (0.5 vs 1.0). The HydrostaticRoe solver shows machine-precision
-  jitter (1.3e-15) on the same AMR config. CI acceptance threshold:
-  plateau jitter ≤ 2e-4; shock position ≤ 0.5% of L. Full evidence
-  table in `solvers/roe/README.md`.
+- **Jitter / accuracy (metric corrected 2026-11-14):** two bands are scored —
+  the intermediate plateau (post-rarefaction) and the undisturbed left
+  reservoir (well-balancedness). On the plateau, AMR adds ~6× noise over the
+  fixed-grid control (4.4e-5 vs 6.9e-6 p2p) and subcycling is the dominant
+  contributor (`amr_nosubcycle` 1.45e-5); flux registers are not involved
+  (`amr_noreflux` 4.40e-5). On the lake, classic Roe is ~5e-5 with the surface
+  0.1% low, HydrostaticRoe is 1e-15 with zero offset. Earlier claims that the
+  wiggle was "classic-Roe flux dispersion, AMR-exonerated" were based on the
+  band-selection bug (the old code scored the lake) and are withdrawn — see
+  `solvers/roe/README.md`. CI thresholds: plateau jitter ≤ 2e-4, lake jitter
+  ≤ 2e-4, shock position ≤ 0.5% of L.
 - `tests/dambreakNoAMR/` (legacy) is a **different problem** (51.2 × 1.6
   domain) — not a valid control for this battery; `solvers/*/inputs_single_level`
   replaces it as the fixed-grid reference.

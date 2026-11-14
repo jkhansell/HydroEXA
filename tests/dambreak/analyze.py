@@ -53,21 +53,50 @@ def numeric_shock_position(x, h):
     return 0.5 * (xs[i] + xs[i + 1])
 
 
-def plateau_band(t, L, hl, hr, x0):
-    """Interior (trimmed 5% each side) of the exact solution's flat
-    intermediate plateau — the post-rarefaction plateau that ends at the
-    shock. Returns (xa, xb) or None."""
+def _flat_runs(t, L, hl, hr, x0):
+    """Flat (zero-gradient) segments of the exact solution, as index ranges."""
     xg, h_ana, _ = exact_profile(t, L, hl, hr, x0)
     dha = np.gradient(h_ana, xg)
     flat = np.abs(dha) < 1e-3 * (hl - hr)
     edges = np.flatnonzero(np.diff(flat.astype(int)) != 0) + 1
     runs = [r for r in np.split(np.arange(len(xg)), edges) if flat[r[0]]]
+    return xg, h_ana, runs
+
+
+def _trim(xg, run, frac=0.05):
+    xa = xg[run[0]] + frac * (xg[run[-1]] - xg[run[0]])
+    xb = xg[run[-1]] - frac * (xg[run[-1]] - xg[run[0]])
+    return xa, xb
+
+
+def plateau_band(t, L, hl, hr, x0):
+    """Interior of the exact solution's INTERMEDIATE plateau (post-rarefaction,
+    pre-shock). The naive 'flattest run with the highest h' picks the LEFT
+    RESERVOIR (h = h_L), which is a different diagnostic entirely — that bug
+    made every earlier 'plateau jitter' number a lake-at-rest measurement."""
+    xg, h_ana, runs = _flat_runs(t, L, hl, hr, x0)
     if not runs:
         return None
-    run = max(runs, key=lambda r: np.max(h_ana[r]))
-    xa = xg[run[0]] + 0.05 * (xg[run[-1]] - xg[run[0]])
-    xb = xg[run[-1]] - 0.05 * (xg[run[-1]] - xg[run[0]])
-    return xa, xb
+    tol = 0.02 * (hl - hr)  # distinguish the three levels h_L / plateau / h_R
+    inner = [r for r in runs
+             if not (abs(h_ana[r].mean() - hl) < tol or abs(h_ana[r].mean() - hr) < tol)]
+    if not inner:
+        return None
+    return _trim(xg, max(inner, key=lambda r: len(r)))
+
+
+def lake_band(t, L, hl, hr, x0):
+    """Interior of the exact solution's left reservoir (undisturbed, at rest).
+    A well-balanced solver must keep this EXACTLY constant; the classic-Roe
+    noise here is a well-balancedness metric, not plateau roughness."""
+    xg, h_ana, runs = _flat_runs(t, L, hl, hr, x0)
+    if not runs:
+        return None
+    tol = 0.02 * (hl - hr)
+    lakes = [r for r in runs if abs(h_ana[r].mean() - hl) < tol]
+    if not lakes:
+        return None
+    return _trim(xg, max(lakes, key=lambda r: len(r)))
 
 
 def all_metrics(x, h, t, L, hl, hr, x0):
@@ -92,6 +121,20 @@ def all_metrics(x, h, t, L, hl, hr, x0):
             m["jitter"] = m["plateau_Linf"] = np.nan
     else:
         m["jitter"] = m["plateau_Linf"] = np.nan
+
+    # Well-balancedness: noise left in the undisturbed left reservoir. A
+    # well-balanced solver keeps this at roundoff; classic Roe does not.
+    lb = lake_band(t, L, hl, hr, x0)
+    if lb is not None:
+        sell = (x > lb[0]) & (x < lb[1])
+        if np.count_nonzero(sell) >= 5:
+            hl_num = h[sell]
+            m["lake_jitter"] = float(np.max(hl_num) - np.min(hl_num))
+            m["lake_level_err"] = float(np.abs(hl_num.mean() - hl))
+        else:
+            m["lake_jitter"] = m["lake_level_err"] = np.nan
+    else:
+        m["lake_jitter"] = m["lake_level_err"] = np.nan
     return m
 
 
@@ -100,6 +143,8 @@ def metrics_summary(m):
         f"shock position: numerical {m['shock_num']:.4f}  analytical {m['shock_ana']:.4f}"
         f"  error {m['shock_err']:+.4f} ({m['shock_err_pct']:.2f}% of L)\n"
         f"profile error vs exact: L1 = {m['L1']:.3e}   Linf = {m['Linf']:.3e}\n"
-        f"plateau jitter (detrended p2p): {m['jitter']:.3e}"
-        f"   plateau Linf err: {m['plateau_Linf']:.3e}"
+        f"intermediate-plateau jitter (p2p): {m['jitter']:.3e}"
+        f"   plateau Linf err: {m['plateau_Linf']:.3e}\n"
+        f"left-reservoir (lake-at-rest) jitter: {m['lake_jitter']:.3e}"
+        f"   level offset: {m['lake_level_err']:.3e}"
     )

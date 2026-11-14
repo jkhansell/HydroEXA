@@ -42,32 +42,39 @@ auto-generated `analysis_t*.png` / `probe_t*.png`).
 
 ## Findings log
 
-### Battery r27 (2026-11-14, nukwa-02, V100 DOUBLE, np=1, unsplit-CFL dt)
+### Battery r29 (2026-11-14, nukwa-02, V100 DOUBLE, np=1, unsplit-CFL dt, plot_freq=1)
 
-All runs: exit 0, no aborts, t=30 complete. Metrics at t=15 from
-`analyze.py` (shock position vs SWASHES; plateau jitter = detrended p2p of
-centerline h on the post-rarefaction plateau):
+All runs: exit 0, t=30 complete, 31 plotfiles each, all 31 figures auto-rendered
+by `run.sh`. **Metric bug corrected:** the earlier `plateau_band()` selected the
+flat run with the highest h — i.e. the LEFT RESERVOIR (h = h_L), not the
+post-rarefaction plateau. Every "plateau jitter" number before r29 was therefore
+a lake-at-rest measurement. Both bands are now reported:
 
-| run | shock error (% of L) | plateau jitter |
-|---|---|---|
-| `amr` | 0.08% | 5.85e-05 |
-| `single_level` | 0.12% | 9.39e-05 |
-| `amr_noreflux` | 0.31% | 6.36e-05 |
-| `amr_nosubcycle` | 0.08% | 6.17e-05 |
-| `hydrostatic_roe/amr` (reference) | 0.09% | **1.3e-15** |
+| run | shock err (%L) | **plateau** h p2p | plateau hu p2p | **lake** h p2p | lake level offset |
+|---|---|---|---|---|---|
+| `amr` | 0.08% | 4.43e-05 | 1.35e-06 | 5.02e-05 | 5.3e-06 |
+| `single_level` | 0.12% | **6.89e-06** | 3.07e-07 | 7.56e-05 | 1.0e-05 |
+| `amr_noreflux` | 0.31% | 4.40e-05 | 1.35e-06 | 5.26e-05 | 8.9e-06 |
+| `amr_nosubcycle` | 0.08% | 1.45e-05 | 4.69e-07 | 5.31e-05 | 7.5e-06 |
+| `hydrostatic_roe/amr` | 0.09% | **7.37e-05** | **1.43e-05** | **1.07e-15** | **0** |
 
-**Conclusions (closes the 2026-11-13 jitter investigation):**
+**What this actually says (supersedes the r27 conclusions):**
 
-- The post-shock plateau wiggle (±~3e-5 visually) is a **classic-Roe
-  flux/limiter characteristic at this resolution**, present in the
-  fixed-grid control. It is NOT: the AMR machinery (single_level rings the
-  most), the flux registers (noreflux unchanged), subcycling (nosubcycle
-  unchanged), or CFL margin (see below). The well-balanced HydrostaticRoe
-  run is jitter-free at machine precision on the same AMR config — a useful
-  cross-solver discriminator for future regressions.
-- Acceptance threshold for CI: plateau jitter ≤ 2e-4 on the plateau.
-- Shock position agrees with the analytical solution to ≤0.31% of the
-  domain length in all configurations.
+- **Plateau (intermediate state):** the fixed-grid control is the smoothest
+  (6.9e-6) and full AMR is ~6× rougher (4.4e-5) → **AMR interpolation does add
+  noise on the plateau**. `amr_noreflux` is identical to `amr` (4.40 vs 4.43e-5)
+  → flux registers are NOT the source. `amr_nosubcycle` drops to 1.45e-5 →
+  **subcycling / coarse-level time interpolation is the dominant contributor
+  (~3×)**, making CC-3 (time interpolation) the concrete next target.
+- **Lake at rest:** classic Roe is not well-balanced — ~5e-5 p2p and a surface
+  0.1% low (h = 4.9947e-3 vs 5.0000e-3), in the fixed grid and AMR alike.
+  HydrostaticRoe holds it at 1e-15 with zero offset. That is the correct
+  well-balancedness discriminator between the solvers.
+- **HydrostaticRoe is the noisiest on the plateau** (h 7.4e-5, hu 1.4e-5 ≈ 10×
+  classic Roe) — the hu sawtooth visible in its figures. It trades plateau
+  smoothness for exact lake preservation; it is not a "clean reference".
+- `amr_noreflux` remains the worst on shock position (0.31% vs 0.08% for `amr`)
+  → reflux is the momentum/shock-speed accuracy knob; keep it ON.
 
 ### dt formula history (2026-11-13/14)
 
@@ -76,5 +83,7 @@ centerline h on the post-rarefaction plateau):
 `cfl = 0.5` means an actual unsplit CFL of 0.5. The earlier split wavespeed
 form `min(dx/(|u|+c), dy/(|v|+c))` was 2× less restrictive on square cells
 (unsplit CFL = 2·cfl = 1.0). The jitter metric proved insensitive to the
-formula (5–9e-5 at both CFL 0.5 and 1.0), but the unsplit form was adopted
-so that "CFL" has the same meaning in both solvers.
+formula (5–9e-5 lake / 4.4e-5 plateau, both CFL 0.5 and 1.0), but the
+unsplit form was adopted so that "CFL" has the same meaning in both
+solvers. It did NOT fix the plateau noise because the noise is not
+CFL-marginality.
