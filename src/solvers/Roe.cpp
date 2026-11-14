@@ -1,6 +1,8 @@
 #include <solvers/Roe.H>
 #include <solvers/kernels/Roe.H>
 #include <boundaries/BCFill.H>
+#include <AMReX_ParallelDescriptor.H>
+#include <AMReX_Print.H>
 
 #include <memory>
 
@@ -16,8 +18,8 @@ Roe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
     const amrex::MultiFab& S = U[lev];
     const amrex::MultiFab& Terrain = terrain[lev];
 
-    amrex::ReduceOps<amrex::ReduceOpMin> reduce_op;
-    amrex::ReduceData<amrex::Real> reduce_data(reduce_op);
+    amrex::ReduceOps<amrex::ReduceOpMin, amrex::ReduceOpMax> reduce_op;
+    amrex::ReduceData<amrex::Real, amrex::Real> reduce_data(reduce_op);
 
     using ReduceTuple = decltype(reduce_data)::Type;
 
@@ -39,32 +41,57 @@ Roe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
                 {
                     
                     if (std::abs(z_arr(i,j,k,0) - (-9999.0)) < Tolerances::TOL10()) {
-                        return 1.e30;
+                        return {1.e30, 0.0};
                     }
 
                     amrex::Real h = arr(i,j,k,0);
                     amrex::Real dt_cell = 1.e6; 
+                    amrex::Real maxu = 0.0;
                     
-                    if (h > 1.e-12) { 
+                    if (h > 1.e-12) {
                         amrex::Real u = arr(i,j,k,1) / h;
                         amrex::Real v = arr(i,j,k,2) / h;
                         // Fixed: Correct namespace resolution for GRAV
-                        amrex::Real c = std::sqrt(PhysConstants::GRAV() * h); 
+                        amrex::Real c = std::sqrt(PhysConstants::GRAV() * h);
 
-                        amrex::Real dt_x = dxx / (std::abs(u) + c);
-                        amrex::Real dt_y = dyy / (std::abs(v) + c);
+                        // Unsplit 2D CFL (same formula as HydrostaticRoe):
+                        // dt*(|u|+c)/dx + dt*(|v|+c)/dy <= 1, so input
+                        // cfl = 0.5 means an ACTUAL unsplit CFL of 0.5.
+                        // The earlier split form min(dx/(|u|+c), dy/(|v|+c))
+                        // is 2x less restrictive on square cells (unsplit
+                        // CFL = 2*cfl = 1.0) and made "cfl" mean different
+                        // things per solver. Re-applied 2026-11-14 after the
+                        // jitter metric showed the plateau wiggle is CFL-
+                        // insensitive (5-9e-5 at both 0.5 and 1.0, fixed
+                        // grid and AMR alike) — see tests/dambreak READMEs.
+                        const amrex::Real speed_x = std::abs(u) + c;
+                        const amrex::Real speed_y = std::abs(v) + c;
 
-                        dt_cell = amrex::min(dt_x, dt_y);
+                        dt_cell = 1.0 / (speed_x / dxx + speed_y / dyy);
+                        maxu = std::max(std::abs(u), std::abs(v));
                     }
-                    return dt_cell;
+                    return {dt_cell, maxu};
                 }
             );
         }
     }
 
     // Extract the LOCAL minimum from the GPU to the CPU
-    ReduceTuple local_dt = reduce_data.value();
-    amrex::Real dt_est = amrex::get<0>(local_dt);
+    ReduceTuple local = reduce_data.value();
+    amrex::Real dt_est = amrex::get<0>(local);
+    amrex::Real max_vel = amrex::get<1>(local);
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        amrex::Print() << "[compute_dt] lev=" << lev << " dt=" << dt_est
+                       << " max|vel|=" << max_vel << "\n";
+    }
+
+    // dt collapse = single-cell velocity explosion. Stop instead of spinning
+    // at dt=0; the per-step max|vel| trace above shows the growth history.
+    if (dt_est < 1.e-12) {
+        amrex::Abort("compute_dt: dt collapsed (velocity explosion). "
+                     "Use dipole_probe.py on the latest plotfile to locate the offending cell.");
+    }
 
     // Apply CFL multiplier to the global safe estimate
     dt_est *= cfl;
@@ -285,7 +312,9 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     const amrex::Real dt_local = dt;
 
     // fill coarse/fine boundaries
-    ctx.FillPatch(lev, time, U_o, ctx.UBCs, 0, U_o.nComp());
+    // Rule R1: momenta cross as momenta; h is rebuilt below from the
+    // transported free surface (Eta) over the grown region.
+    ctx.FillPatch(lev, time, U_o, ctx.UBCs, 1, U_o.nComp() - 1);
     ctx.FillPatchTerrain(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
     ctx.FillPatchEta(lev, time, Eta, ctx.EtaBCs, 0, Eta.nComp());
 

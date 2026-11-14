@@ -17,6 +17,31 @@ void AmrMeshState::ComputeDt()
     // Delegate to BaseSolver::compute_dt — it handles finest-level CFL
     // computation and correct backward propagation to coarser levels.
     solver.compute_dt(dt, U_new, DynamicTerrain, Geom(), refRatio(), finestLevel(), physics_p.cfl);
+
+    // CFL invariant (both stepping modes):
+    //
+    //   dx[lev] = dx_0 / r^lev   (AMReX ref_ratio), so the per-level CFL dt is
+    //   dt_CFL[lev] = dt_CFL[0] / r^lev.
+    //
+    // Subcycled mode (do_subcycle=1): lev takes r^lev substeps of dt[lev] per
+    // outer step, so every level runs at the SAME cfl and all clocks sync.
+    // dt[lev] = dt_CFL[lev] from compute_dt is exactly right.
+    //
+    // Lockstep mode (do_subcycle=0): every level takes exactly ONE step per
+    // outer iteration, so a shared dt is mandatory.  Choosing dt = dt[finest]
+    // = dt_0 / r^n keeps the finest level at its cfl and every coarser level
+    // correspondingly safer (cfl_lev = cfl_fine / r^(n-lev)) — the only
+    // choice that satisfies every level's CFL while keeping clocks synced.
+    // (dt[lev] from compute_dt is already descending in lev, so min = dt[finest].)
+    if (!amr_p.do_subcycle) {
+        amrex::Real dt_min = dt[0];
+        for (int lev = 1; lev <= finestLevel(); ++lev) {
+            dt_min = std::min(dt_min, dt[lev]);
+        }
+        for (int lev = 0; lev <= finestLevel(); ++lev) {
+            dt[lev] = dt_min;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -83,10 +108,6 @@ void AmrMeshState::AdvanceLevel(int lev, amrex::Real time, amrex::Real dt)
 {
     BL_PROFILE("AmrMeshState::AdvanceLevel");
 
-    // Save current Eta to Eta_old before compute_fluxes (which swaps U_new/U_old).
-    // This enables GetEtaData to time-interpolate coarse Eta for fine-level FillPatch.
-    amrex::MultiFab::Copy(Eta_old[lev], Eta[lev], 0, 0, 1, 0);
-
     SolverContext ctx = GetSolverContext();
 
     solver.compute_fluxes(ctx, lev, dt, time);
@@ -96,5 +117,10 @@ void AmrMeshState::AdvanceLevel(int lev, amrex::Real time, amrex::Real dt)
     // eta-based depth reconstruction always see the current free surface.
     // compute_fluxes_Impl swaps U_new/U_old by reference, so after the call
     // U_new holds the updated state (t^{n+1}).
+    //
+    // R2 note (plans/IdealAMR.md): the FillPatch machinery no longer reads
+    // this stored Eta — GetEtaData synthesizes η from U_old/U_new.  This
+    // refresh exists only to keep ctx.Eta fresh for the Roe solver, whose
+    // kernels read it directly.  Removing it (and ctx.Eta) is a later step.
     ComputeEta(lev, false);
 }
