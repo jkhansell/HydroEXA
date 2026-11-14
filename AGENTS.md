@@ -48,6 +48,65 @@ bash scripts/build_HydroEXA.sh kabreL40S.gpu Debug DOUBLE
   is fixed at compile time; HDF5 is not, so it is shared. This lets SINGLE and DOUBLE
   builds coexist and prevents the skip-guards from reusing a mismatched AMReX install.
 
+### What the script does for you (and what it expects from you)
+
+`build_HydroEXA.sh` is a **one-command pipeline**: you do not need to load modules,
+set paths, or invoke cmake yourself. It handles, in order:
+
+1. **Path resolution** — `resolve_paths "<target>"` (from `lib.sh`) namespaces
+   `BUILD_ROOT`/`INSTALL_ROOT` by machine target and precision, then exports
+   `HDF5_ROOT`, `AMREX_ROOT`, `HYDROEXA_SRC/BUILD/INSTALL` for the child stages.
+2. **Machine environment** — it **re-sources `machines/<target>` internally**.
+   The profile owns the full environment: `module purge` + all `module load`s
+   (compiler, MPI, CUDA, HDF5, **cmake**), `CC`/`CXX`/`FC`, and `GPU_FLAGS`.
+   Consequence: **anything you `module load` before running the script is silently
+   wiped** by the profile's `module purge`. Never rely on pre-loaded modules —
+   add the module to the machine profile instead.
+3. **Stage guards** — each stage is skipped when its install already exists:
+   - HDF5: skipped if `install_<target>/hdf5/` is populated
+   - AMReX: skipped if `install_<target>/amrex_<PRECISION>/` is populated
+   - HydroEXA: skipped (exit 0, "already installed") if
+     `install_<target>/hydroexa_<PRECISION>/bin/HydroEXA` exists
+
+### Forcing rebuilds
+
+The guards check *installs*, not source freshness. After editing solver sources,
+`build_HydroEXA.sh` will report "already installed" and do nothing — this is the
+intended fast path, and rebuilding is one command:
+
+```bash
+# Only sources changed (the usual case):
+rm -rf install_<target>/hydroexa_<PRECISION> build_<target>/hydroexa_<PRECISION>
+bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
+
+# Toolchain/third-party changed (AMReX, HDF5, machine profile):
+rm -rf install_<target>/amrex_<PRECISION>   # or install_<target>/hdf5, or both
+bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
+```
+
+CMake re-runs configure from scratch each time (the script deletes
+`CMakeCache.txt` in the HydroEXA stage), so there is no incremental-cache staleness
+to worry about — only the install guards.
+
+### CMake version coupling (Kabré gotcha)
+
+The installed `AMReXConfig.cmake` embeds
+`cmake_minimum_required(VERSION <the cmake that built AMReX>)`, so the HydroEXA
+stage's `find_package(AMReX)` fails if the running cmake is *older* than the one
+that built the AMReX install — even though the AMReX sources themselves only
+declare 3.18. Therefore: **the machine profile must load a cmake at least as new
+as the one that built `install_<target>/amrex_<PRECISION>`**; profiles already do
+this (`module load cmake/...`). If AMReX is ever rebuilt with a newer cmake,
+rebuild nothing else but be aware old install configs will now demand it.
+
+**Open issue (as of 2026-11):** on Kabré (AlmaLinux 9.x), the `cmake/4.x` modules
+under `/opt/tools` fail with `libssl.so.10: cannot open shared object file` —
+those binaries were built against CentOS 7 OpenSSL libs, absent from the current
+image (both on the login node and GPU nodes). The AMReX install currently pinned
+was built with cmake 3.31.8. Until a working cmake ≥ 3.31.8 is available (e.g. a
+user-space cmake via `uv pip install cmake` wired into the machine profiles in
+place of the broken module), fresh AMReX/HydroEXA configure on Kabré is blocked.
+
 ### Manual CMake configure (after AMReX is built)
 
 ```bash
@@ -119,7 +178,7 @@ HydroEXACode/
 │   │   ├── SolverContext.H       # MultiFabs, BCs, flux registers passed to solvers
 │   │   ├── Roe.H, HydrostaticRoe.H
 │   │   ├── RoeExnerACM.H, RoeExnerFCM.H   # header-only, see Known Gaps
-│   │   └── kernels/              # device-side: Roe.H, AlternateRoe.H, HydrostaticRoe.H
+│   │   └── kernels/              # device-side: Roe.H, HydrostaticRoe.H
 │   ├── state/AmrMeshState.H      # AmrCore subclass owning state, terrain, solver, BCs
 │   └── utils/                    # Params.H, Constants.H, Logging.H,
 │                                 # MaskedAverageDown.H, FillPatchUtils.H
@@ -169,10 +228,10 @@ Run from the test directory (input paths are relative). Test cases:
 
 | Directory | Purpose |
 |-----------|---------|
-| `tests/dambreakAMR` | rectangular dam break with AMR refinement |
-| `tests/dambreakNoAMR` | same case, fixed base grid (AMR control) |
+| `tests/dambreak/` | **E2E dam-break battery (SWASHES benchmark)**: shared `RectangularDambreak.h5` + analysis scripts at the parent; `solvers/{roe,hydrostatic_roe}/` hold input variants (`amr`, `amr_noreflux`, `amr_nosubcycle`, `single_level`) + per-solver test docs; all artifacts in `outputs/<solver>/`. Runner: `bash run.sh <solver> <variant> <exe> [np]`. Intended for CI/CD. |
+| `tests/dambreakNoAMR` | legacy dam break on a **different domain** (51.2×1.6) — not a control for `tests/dambreak/`; the fixed-grid reference there is `solvers/roe/inputs_single_level` |
 | `tests/dambreakcircle` | circular dam break, includes DEM/TIFF → HDF5 tooling |
-| `tests/LakeAtRestAugmentedRoe` | lake-at-rest preservation, augmented Roe |
+| `tests/LakeAtRestAugmentedRoe` | stale dir — its `inputs` is a dam-break config (`model="Roe"`); pending rename/removal |
 | `tests/LakeAtRestHydrostaticRoe` | lake-at-rest preservation, hydrostatic Roe |
 
 Generate test input: `uv run python tests/make_test_h5.py` (per test directory).
@@ -211,8 +270,9 @@ The root `pyproject.toml` is a **uv workspace** whose only member is `PyHydroEXA
 - **Exner solvers are not wired in.** `include/solvers/RoeExnerACM.H` and
   `RoeExnerFCM.H` are declared but absent from `SolverVariant` and have no `.cpp`;
   sediment/morphodynamic coupling is still in progress.
-- **`kernels/AlternateRoe.H`** is an experimental kernel variant; confirm it is referenced
-  before assuming it is active.
+- **`kernels/AlternateRoe.H`** was removed (2026-11-13): it was orphaned —
+  no references anywhere in `src/` or `include/`, and not in `SolverVariant`.
+
 - **Artifacts in tree** (do not treat as source): `build_*/`, `install_*/`, `.venv/`,
   `logs/`, `tests/*/plotfiles/`, `tests/*/outputs/`, `Backtrace.*`, `err.log`.
   Third-party *sources* stay in `tpl/`; their builds/installs live under the

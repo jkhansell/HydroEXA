@@ -36,10 +36,10 @@ HydroEXA.hi_bc         =  1 0   # X_BC, Y_BC
 # =====================================================================
 # AMR RUNTIME ADAPTIVITY CONFIGURATION
 # =====================================================================
-amr.max_level              = 1       # Two level AMR for this test
-amr.regrid_int             = 50
-amr.do_reflux              = 1
-amr.do_subcycle            = 1
+amr.max_level              = 0
+amr.regrid_int             = 0
+amr.do_reflux              = 0
+amr.do_subcycle            = 0
 amr.blocking_factor        = 32
 amr.v                      = 1
 
@@ -51,10 +51,10 @@ amr.ref_ratio              = 2 2 2
 # SYSTEM PARALLEL DATA / INPUT OUTPUT MANAGEMENT
 # ====================================================================
 io.chk_freq                = 10000
-io.plot_freq               = 1       # Dump every step for debugging
+io.plot_freq               = 5
 io.chk_type                = HDF5
 io.async_io                = 1
 
 io.input_file              = "RectangularDambreak.h5"
-io.plot_file               = "/tmp/plotfiles/plt"
+io.plot_file = "outputs/roe/plt"
 io.chk_file                = "checkpoints/chk"
