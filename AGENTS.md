@@ -184,8 +184,9 @@ HydroEXACode/
 │                                 # MaskedAverageDown.H, FillPatchUtils.H
 ├── machines/                     # one shell profile per target (7)
 ├── scripts/                      # build_HydroEXA.sh, build_AMReX.sh, build_HDF5.sh, lib.sh, visualize.py
-├── tests/                        # dambreakAMR, dambreakNoAMR, dambreakcircle,
-│                                 # LakeAtRestAugmentedRoe, LakeAtRestHydrostaticRoe
+├── tests/                        # dambreak (E2E battery), dambreakNoAMR (legacy),
+│                                 # dambreakcircle, LakeAtRestRoe,
+│                                 # LakeAtRestHydrostaticRoe, LakeAtRestAugmentedRoe (stale)
 ├── PyHydroEXA/                   # Python companion package (uv workspace member)
 ├── docs/PIPELINE.md              # full simulation pipeline reference
 ├── plans/                        # design notes (HydrostaticRoe, pyhydroexa plans)
