@@ -36,7 +36,11 @@ rm -rf "${HDF5_BUILD}"
 mkdir -p "${HDF5_BUILD}"
 cd "${HDF5_BUILD}"
 
-CC="${CC}" "${HDF5_SRC}/configure" \
+# -fPIC: the static lib is linked into HydroEXA executables, which modern
+# toolchains (gcc >= 6 on Linux) build as PIE by default.  Without it the link
+# fails with "relocation R_X86_64_32S ... can not be used when making a PIE
+# object; recompile with -fPIE".
+CC="${CC}" CFLAGS="${CFLAGS} -fPIC" "${HDF5_SRC}/configure" \
     --prefix="${HDF5_INSTALL}" \
     --enable-parallel \
     --disable-cxx \
