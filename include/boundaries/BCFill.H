@@ -129,31 +129,38 @@ inline void SetYVelocityBC(amrex::BCRec& bc, BCParams& bc_params)
 }
 
 /**
- * \brief Do nothing, on purpose: the ``BCRec`` already says what to do.
+ * \brief Boundary functor handed to AMReX; its operator is empty by design.
  *
- * AMReX's ``FillDomainBoundary`` fills ``foextrap``, ``hoextrap``,
- * ``reflect_even`` and ``reflect_odd`` ghost cells itself from the ``BCRec``
- * codes; a boundary functor is only consulted for ``ext_dir``, i.e. for a
- * Dirichlet value that no code can express.  This solver never uses
- * ``ext_dir``, so the operator is an empty body that satisfies the interface.
- *
- * That is worth stating explicitly, because an empty function reads like an
- * unfinished one.  It is not: replacing it with a hand-written reflection
- * loop would duplicate ``FillDomainBoundary`` and would have to get the
- * staggered-index cases right again.  The real BC logic is in
- * ``ScalarBC``/``NormalBC``/``TangentialBC`` above.
- *
- * \param iv    Ghost-cell index to fill.
- * \param a     Destination array.
- * \param dcomp First destination component.
- * \param ncomp Number of components.
- * \param geom  Domain geometry.
- * \param bcr   Per-component BC record; unused, because the ``BCType`` codes
- *              in it are what AMReX acts on.
- * \param bcomp First component in \p bcr.
+ * It exists to satisfy the ``PhysBCFunct`` interface, not to fill anything.
+ * See the operator below for why that is correct rather than unfinished.
  */
 struct ExternalBCFill
 {
+    /**
+     * \brief Do nothing, on purpose: the ``BCRec`` already says what to do.
+     *
+     * AMReX's ``FillDomainBoundary`` fills ``foextrap``, ``hoextrap``,
+     * ``reflect_even`` and ``reflect_odd`` ghost cells itself from the
+     * ``BCRec`` codes; a boundary functor is only consulted for ``ext_dir``,
+     * i.e. for a Dirichlet value that no code can express.  This solver never
+     * uses ``ext_dir``, so the operator is an empty body that satisfies the
+     * interface.
+     *
+     * That is worth stating explicitly, because an empty function reads like an
+     * unfinished one.  It is not: replacing it with a hand-written reflection
+     * loop would duplicate ``FillDomainBoundary`` and would have to get the
+     * staggered-index cases right again.  The real BC logic is in
+     * ``ScalarBC``/``NormalBC``/``TangentialBC`` above.
+     *
+     * \param iv    Ghost-cell index to fill.
+     * \param a     Destination array.
+     * \param dcomp First destination component.
+     * \param ncomp Number of components.
+     * \param geom  Domain geometry.
+     * \param bcr   Per-component BC record; unused, because the ``BCType``
+     *              codes in it are what AMReX acts on.
+     * \param bcomp First component in \p bcr.
+     */
     AMREX_GPU_DEVICE
     void operator()(const amrex::IntVect& iv,
                     amrex::Array4<amrex::Real> const& a,
