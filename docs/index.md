@@ -15,6 +15,13 @@ architecture
 
 ```{toctree}
 :maxdepth: 2
+:caption: Contributing
+
+contributing
+```
+
+```{toctree}
+:maxdepth: 2
 :caption: API reference
 
 api/index
