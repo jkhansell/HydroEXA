@@ -95,6 +95,10 @@ make -C docs html
 `make -C docs html` runs both steps and drops straight back out if `doxygen`
 is not on `PATH`.
 
+The published site is built by `.github/workflows/docs.yml` on every push to
+`develop` and `main`, and deployed from both: `develop` keeps it current,
+`main` republishes the same tree at release time.
+
 The Sphinx environment is deliberately not the repository workspace.
 `docs/pyproject.toml` installs the Sphinx stack plus `numpy`, `scipy` and
 `matplotlib` -- the three libraries `pyhydroexa` imports at module level -- and

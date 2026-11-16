@@ -15,7 +15,8 @@ daily loop, the release steps, and the rules that are easy to get wrong.
 
 `AmrCore_refactor` predates this model: it was the only branch carrying real
 work while `main` still held three commits. It was merged into `develop` for
-`v0.1.0` and is kept as that release's provenance.
+`v0.1.0` and then deleted -- the tag records where that release came from, so a
+live branch adds nothing. Its commits stay in `develop`'s history.
 
 The invariant that makes the model work: **at a release, `main` and `develop`
 are tree-identical.** `develop` then moves ahead with new work while `main`
@@ -142,6 +143,7 @@ means their `v0.1.0` is not yours; cut a patch release instead. Before it is
 pushed, moving it is harmless.
 
 **Branch names are configuration.** `.github/workflows/docs.yml` names the
-branches it builds and the one it deploys from. Renaming a long-lived branch is
-a code change plus a GitHub setting, which is why this model keeps `main`
-instead of introducing `master`.
+branches it builds and deploys, and GitHub Pages has to be set to publish from
+GitHub Actions for that workflow to be the publisher. Renaming a long-lived
+branch is a code change plus a GitHub setting, which is why this model keeps
+`main` instead of introducing `master`.
