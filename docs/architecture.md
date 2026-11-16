@@ -2,7 +2,7 @@
 
 # Code architecture audit
 
-Measured at `5076771` on 2026-11-16 00:59 UTC from `HydroEXA`.
+Measured at `f831659` on 2026-11-16 01:11 UTC from `HydroEXA`.
 
 Counts are comment-aware SLOC: docstrings and comments are counted separately, blank lines are excluded. Generated and vendored trees (`tpl/`, `build*/`, `docs/_build/`, plotfiles) are skipped.
 
@@ -10,28 +10,28 @@ Counts are comment-aware SLOC: docstrings and comments are counted separately, b
 
 | Language | Files | SLOC | Comment lines | Comments / SLOC |
 | --- | ---: | ---: | ---: | ---: |
-| c | 36 | 3,879 | 692 | 0.18 |
-| python | 58 | 8,056 | 2,713 | 0.34 |
-| shell | 7 | 283 | 177 | 0.63 |
-| **all** | **101** | **12,218** | **3,582** | 0.29 |
+| c | 36 | 3,950 | 705 | 0.18 |
+| python | 63 | 8,170 | 2,774 | 0.34 |
+| shell | 7 | 316 | 194 | 0.61 |
+| **all** | **106** | **12,436** | **3,673** | 0.30 |
 
 ## Code mass distribution
 
 | Measure | Value | Reading |
 | --- | ---: | --- |
-| Normalized entropy | 0.935 | 1.0 = every file the same size; low = a few files hold the code |
-| Effective file count | 58.7 | the 101 files behave like this many equal ones |
-| Largest single file | 524 SLOC | 4.3% of the tree (`src/state/AmrMeshState_AMR.cpp`) |
+| Normalized entropy | 0.932 | 1.0 = every file the same size; low = a few files hold the code |
+| Effective file count | 59.8 | the 106 files behave like this many equal ones |
+| Largest single file | 546 SLOC | 4.4% of the tree (`src/state/AmrMeshState_AMR.cpp`) |
 
 Heaviest files (top 10):
 
 | File | SLOC | Comments |
 | --- | ---: | ---: |
-| `src/state/AmrMeshState_AMR.cpp` | 524 | 61 |
-| `src/solvers/HydrostaticRoe.cpp` | 447 | 84 |
-| `src/solvers/Roe.cpp` | 413 | 90 |
-| `PyHydroEXA/tests/validate_full.py` | 374 | 89 |
-| `src/state/AmrMeshState_Utils.cpp` | 344 | 55 |
+| `src/state/AmrMeshState_AMR.cpp` | 546 | 61 |
+| `src/solvers/HydrostaticRoe.cpp` | 463 | 88 |
+| `src/solvers/Roe.cpp` | 430 | 95 |
+| `PyHydroEXA/tests/validate_full.py` | 378 | 89 |
+| `src/state/AmrMeshState_Utils.cpp` | 352 | 55 |
 | `PyHydroEXA/src/pyhydroexa/audit/report.py` | 339 | 78 |
 | `tests/dambreak/plot_output.py` | 299 | 22 |
 | `PyHydroEXA/src/pyhydroexa/preprocessing/fields.py` | 263 | 94 |
@@ -42,9 +42,9 @@ Heaviest files (top 10):
 
 | Measure | Value | Reading |
 | --- | ---: | --- |
-| Files in graph | 101 | counted sources |
-| Internal edges | 91 | include/import lines resolved inside the tree |
-| Cycles | 1 | must be zero |
+| Files in graph | 106 | counted sources |
+| Internal edges | 92 | include/import lines resolved inside the tree |
+| Cycles | 0 | must be zero |
 | Condensation depth | 6 | layers a change can ripple through |
 | Dependency entropy | 0.956 | 1.0 = dependencies spread evenly; low = a few files carry them |
 
@@ -61,7 +61,7 @@ Most depended-on files (fan-in, top 10):
 | `PyHydroEXA/src/pyhydroexa/preprocessing/geometry.py` | 4 | 0.33 |
 | `include/io/CheckpointerContext.H` | 4 | 0.00 |
 | `PyHydroEXA/src/pyhydroexa/audit/sloc.py` | 3 | 0.00 |
-| `PyHydroEXA/src/pyhydroexa/postprocessing/fields.py` | 3 | 0.00 |
+| `PyHydroEXA/src/pyhydroexa/io/fields.py` | 3 | 0.00 |
 
 Most dependent files (fan-out, top 10):
 
@@ -75,15 +75,14 @@ Most dependent files (fan-out, top 10):
 | `src/solvers/HydrostaticRoe.cpp` | 4 |
 | `src/state/AmrMeshState_Physics.cpp` | 4 |
 | `PyHydroEXA/src/pyhydroexa/audit/report.py` | 3 |
+| `PyHydroEXA/src/pyhydroexa/cli.py` | 3 |
 | `include/io/IOHandler.H` | 3 |
-| `include/solvers/HydrostaticRoe.H` | 3 |
 
 ## Findings
 
 | # | Kind | Subject | Why it matters |
 | ---: | --- | --- | --- |
-| 1 | cycle | `PyHydroEXA/src/pyhydroexa/postprocessing/animation.py <-> PyHydroEXA/src/pyhydroexa/postprocessing/plotfile.py` | 2 files form an include/import cycle; the knot has to be untangled before it can be built or reasoned about incrementally. |
-| 2 | high fan-in | `include/utils/Logging.H` | 10 files depend on it: every signature change is a 10-file edit, so treat it as public API. |
-| 3 | broad ripple | `include/utils/Constants.H` | a change here reaches 15 files transitively; the blast radius is a review item. |
-| 4 | broad ripple | `include/utils/Params.H` | a change here reaches 15 files transitively; the blast radius is a review item. |
-| 5 | broad ripple | `include/solvers/SolverContext.H` | a change here reaches 14 files transitively; the blast radius is a review item. |
+| 1 | high fan-in | `include/utils/Logging.H` | 10 files depend on it: every signature change is a 10-file edit, so treat it as public API. |
+| 2 | broad ripple | `include/utils/Constants.H` | a change here reaches 15 files transitively; the blast radius is a review item. |
+| 3 | broad ripple | `include/utils/Params.H` | a change here reaches 15 files transitively; the blast radius is a review item. |
+| 4 | broad ripple | `include/solvers/SolverContext.H` | a change here reaches 14 files transitively; the blast radius is a review item. |
