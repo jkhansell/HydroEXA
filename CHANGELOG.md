@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.0] — 2026-11-15
+
+First tagged release.  The AMR shallow-water solver, both Roe variants
+(classic and hydrostatic/well-balanced), the CPU and GPU build pipeline, and
+the `pyhydroexa` preprocessing, analysis and audit tooling, with the C++ and
+Python API documented in one Sphinx tree.
+
+`main` carries released code and this tag; `develop` is where integration
+happens from now on.  The dated `[Unreleased]` sections below are kept as the
+pre-release development log, in the order they were written.
+
 ## [Unreleased] — 2026-08-31
 
 ### Fixed
