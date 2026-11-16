@@ -27,6 +27,7 @@ pyhydroexa = "pyhydroexa:main"
 pyhydroexa-inspect = "pyhydroexa.cli:main"
 pyhydroexa-plot = "pyhydroexa.cli:main"
 pyhydroexa-animate = "pyhydroexa.cli:main"
+pyhydroexa-audit = "pyhydroexa.audit:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
