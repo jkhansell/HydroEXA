@@ -2,7 +2,7 @@
 
 # Code architecture audit
 
-Measured at `461f7b6` on 2026-11-16 01:38 UTC from `HydroEXA`.
+Measured at `2b0a120` on 2026-11-16 01:51 UTC from `HydroEXA`.
 
 Counts are comment-aware SLOC: docstrings and comments are counted separately, blank lines are excluded. Generated and vendored trees (`tpl/`, `build*/`, `docs/_build/`, plotfiles) are skipped.
 
@@ -11,9 +11,9 @@ Counts are comment-aware SLOC: docstrings and comments are counted separately, b
 | Language | Files | SLOC | Comment lines | Comments / SLOC |
 | --- | ---: | ---: | ---: | ---: |
 | c | 36 | 3,880 | 2,083 | 0.54 |
-| python | 61 | 7,874 | 2,711 | 0.34 |
+| python | 61 | 7,909 | 2,749 | 0.35 |
 | shell | 5 | 229 | 131 | 0.57 |
-| **all** | **102** | **11,983** | **4,925** | 0.41 |
+| **all** | **102** | **12,018** | **4,963** | 0.41 |
 
 ## Code mass distribution
 
@@ -34,7 +34,7 @@ Heaviest files (top 10):
 | `src/state/AmrMeshState_Utils.cpp` | 344 | 55 |
 | `PyHydroEXA/src/pyhydroexa/audit/report.py` | 339 | 78 |
 | `tests/dambreak/plot_output.py` | 299 | 22 |
-| `PyHydroEXA/src/pyhydroexa/preprocessing/fields.py` | 263 | 94 |
+| `PyHydroEXA/src/pyhydroexa/preprocessing/fields.py` | 263 | 99 |
 | `src/io/IOHandler.cpp` | 260 | 20 |
 | `tests/dambreakNoAMR/plot_output.py` | 247 | 18 |
 
