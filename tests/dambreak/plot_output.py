@@ -23,7 +23,7 @@ except ImportError:
 
 OUTPUT_DIR = "outputs"
 FIGSIZE = (15, 13)
-DPI = 250
+DPI = int(os.environ.get("HYDROEXA_PLOT_DPI", 400))
 
 VARIABLE_ALIASES = {
     "h": ["h_fluid", "h", "water_depth", "Depth"],
@@ -76,6 +76,24 @@ def get_level_info(ds):
             "nblocks": int(np.count_nonzero(levels == level)),
         })
     return info
+
+
+def grid_boxes(ds):
+    """[(level, x0, y0, x1, y1)] for every AMR grid, coarse first.
+
+    Drawing these on the 2D map is how we tell whether a wiggle lives at a
+    patch boundary (ghost-fill / reflux) or inside a single grid (where neither
+    mechanism can reach).
+    """
+    levels = np.asarray(ds.index.grid_levels, dtype=int).flatten()
+    out = []
+    for i in np.argsort(levels):
+        g = ds.index.grids[i]
+        le = np.asarray(g.LeftEdge.to_ndarray(), dtype=float)
+        re = np.asarray(g.RightEdge.to_ndarray(), dtype=float)
+        out.append((int(levels[i]), float(le[0]), float(le[1]),
+                    float(re[0]), float(re[1])))
+    return out
 
 
 def build_amr_composite(ds, field):
@@ -215,8 +233,11 @@ def plot_level_strip(ax, x, levels, level_info):
     ax.set_ylim(0, 1)
     ax.set_yticks([])
     ax.set_ylabel("AMR")
-    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5),
-              fontsize=8, frameon=False)
+    # Keep the entries inside the axes: with bbox_to_anchor=(1.01, ...) the
+    # labels were clipped by the figure's right margin at 400 dpi.
+    ax.legend(loc="upper right", fontsize=8, handlelength=1.6,
+              borderaxespad=0.3, frameon=True, framealpha=0.85,
+              facecolor="white", edgecolor="none")
     ax.grid(False)
 
 
