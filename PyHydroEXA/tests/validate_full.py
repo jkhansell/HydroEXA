@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full validation suite for pyhydroexa.postprocessing.
+"""Full validation suite for the pyhydroexa reader/analysis/plotting layers.
 
 Tests every module against actual HydroEXA plotfiles.  Produces visual
 output (PNGs and GIF) to confirm correctness.
@@ -34,24 +34,28 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
-from pyhydroexa.postprocessing import (
+from pyhydroexa.io import (
+    DEFAULT_ALIASES,
     Plotfile,
     PlotfileSeries,
-    plot_field,
-    plot_field_with_amr_overlay,
-    extract_profile,
-    extract_horizontal_cut,
-    extract_vertical_cut,
-    generate_animation,
-    resolve_field,
     extract_field,
+    filter_blocks_by_region,
+    get_available_levels,
     get_field_coordinates,
     get_meshblock_rectangles,
-    get_available_levels,
-    filter_blocks_by_region,
-    DEFAULT_ALIASES,
+    resolve_field,
 )
-from pyhydroexa.postprocessing.profiles import LineProfile
+from pyhydroexa.analysis import (
+    LineProfile,
+    extract_horizontal_cut,
+    extract_profile,
+    extract_vertical_cut,
+)
+from pyhydroexa.plotting import (
+    generate_animation,
+    plot_field,
+    plot_field_with_amr_overlay,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -233,7 +237,7 @@ def test_amr_utilities() -> None:
         LineProfile(0.0, np.array([1]), np.array([0]), ""),  # dummy
     ]
     # Use actual MeshBlock
-    from pyhydroexa.postprocessing.amr import MeshBlock
+    from pyhydroexa.io import MeshBlock
     test_blocks = [
         MeshBlock(0.0, 0.0, 5.0, 1.6, 0),
         MeshBlock(5.0, 0.0, 5.0, 1.6, 0),
@@ -455,7 +459,7 @@ def test_animation() -> None:
     out_gif = OUTPUT_DIR / "test_animation.gif"
 
     try:
-        from pyhydroexa.postprocessing.animation import generate_animation
+        from pyhydroexa.plotting import generate_animation
         # Build a PlotfileSeries from just the first 5 plotfiles
         import glob as glob_mod
         first5 = sorted(glob_mod.glob(str(NOAMR_DIR / "plt0000[0-4]")))

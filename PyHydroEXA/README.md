@@ -5,7 +5,8 @@ Python companion package for the HydroEXA shallow-water solver.
 ## Quick start
 
 ```python
-from pyhydroexa.postprocessing import Plotfile, PlotfileSeries, plot_field_with_amr_overlay
+from pyhydroexa.io import Plotfile, PlotfileSeries
+from pyhydroexa.plotting import plot_field_with_amr_overlay, generate_animation
 
 # Single plotfile
 pf = Plotfile("plt00010")
@@ -14,10 +15,10 @@ plot_field_with_amr_overlay(pf, field="h", output="water_depth.png")
 
 # Series
 series = PlotfileSeries("plt*")
-for pf in series:
-    print(pf.time)
+for frame in series:
+    print(frame.time)
 
-series.animate(field="h", output="evolution.gif")
+generate_animation(series, field="h", output="evolution.gif")
 ```
 
 ## CLI
@@ -26,16 +27,23 @@ series.animate(field="h", output="evolution.gif")
 pyhydroexa-inspect plt00010
 pyhydroexa-plot plt00010 h --amr --output depth.png
 pyhydroexa-animate "plt*" h --output evolution.gif
+pyhydroexa-audit --top 5          # measure the source tree itself
 ```
 
 ## Modules
 
+The package is split by responsibility, so importing one layer does not
+drag the others in. Reading a plotfile must work on a machine with no
+plotting stack; drawing must not need to know how a plotfile is stored.
+
 | Module | Description |
 |--------|-------------|
-| `postprocessing.plotfile` | Plotfile / PlotfileSeries abstractions |
-| `postprocessing.fields` | Field discovery and alias resolution |
-| `postprocessing.amr` | AMR MeshBlock utilities |
-| `postprocessing.profiles` | Line / profile extraction |
-| `postprocessing.plots` | Reusable plotting functions |
-| `postprocessing.animation` | GIF generation from plotfile series |
+| `io.plotfile` | `Plotfile` / `PlotfileSeries`, lazy `yt` load |
+| `io.fields` | Field discovery, alias resolution, array extraction |
+| `io.amr` | AMR MeshBlock geometry |
+| `analysis.profiles` | Line / profile extraction (numbers, no figures) |
+| `plotting.plots` | Field maps, AMR overlays, profile plots |
+| `plotting.animation` | GIF generation from a plotfile series |
+| `preprocessing` | Rasters / DEMs / fields -> one HydroEXA HDF5 file |
+| `audit` | SLOC entropy and include/import coupling of the source tree |
 | `cli` | Command-line interface |

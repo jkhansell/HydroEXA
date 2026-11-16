@@ -143,8 +143,8 @@ def extract_field(
     left_edge = np.asarray(ds.domain_left_edge.to_ndarray(), dtype=np.float64)
     dims = np.asarray(ds.domain_dimensions, dtype=int)
 
-    covering = yt.covering_grid(
-        ds, level=level, left_edge=left_edge, dims=dims
+    covering = ds.covering_grid(
+        level=level, left_edge=left_edge, dims=dims
     )
     data = np.asarray(covering[field_tuple].to_ndarray(), dtype=np.float64)
 
@@ -193,10 +193,6 @@ def get_field_coordinates(
     left_edge = np.asarray(ds.domain_left_edge.to_ndarray(), dtype=np.float64)
     right_edge = np.asarray(ds.domain_right_edge.to_ndarray(), dtype=np.float64)
     dims = np.asarray(ds.domain_dimensions, dtype=int)
-
-    covering = yt.covering_grid(
-        ds, level=level, left_edge=left_edge, dims=dims
-    )
 
     nx = int(dims[0])
     ny = int(dims[1]) if ds.dimensionality >= 2 else 1

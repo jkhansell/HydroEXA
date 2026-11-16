@@ -6,8 +6,10 @@ simultaneously.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Optional
+import io
+from typing import Any
+
+import matplotlib.pyplot as plt
 
 try:
     import imageio
@@ -16,8 +18,49 @@ except ImportError:
     imageio = None  # type: ignore
     HAS_IMAGEIO = False
 
-from .plotfile import Plotfile, PlotfileSeries
-import matplotlib.pyplot as plt
+from ..io.plotfile import Plotfile, PlotfileSeries
+from .plots import plot_field_with_amr_overlay
+
+
+def _render_frame(
+    pf: Plotfile,
+    field: str,
+    dpi: int = 150,
+    figsize: tuple = (14, 8),
+    **kwargs: Any,
+) -> bytes:
+    """Render one plotfile to raw PNG bytes.
+
+    Parameters
+    ----------
+    pf :
+        A :class:`Plotfile` instance.
+    field :
+        Logical field name.
+    dpi :
+        Figures-per-inch.
+    figsize :
+        Figure size in inches.
+    **kwargs :
+        Passed to :func:`plots.plot_field_with_amr_overlay`.
+
+    Returns
+    -------
+    bytes
+        Raw PNG data.
+    """
+    buf = io.BytesIO()
+    ax = plot_field_with_amr_overlay(
+        pf, field, dpi=dpi, figsize=figsize, return_ax=True, **kwargs
+    )
+    if ax is not None:
+        fig = ax.figure
+        fig.savefig(buf, format="png", dpi=dpi)
+        plt.close(fig)
+    else:
+        plt.close()
+    buf.seek(0)
+    return buf.read()
 
 
 def generate_animation(
@@ -68,7 +111,7 @@ def generate_animation(
     frames: list[bytes] = []
 
     for pf in series:
-        buf = plot_field_with_amr_overlay(
+        buf = _render_frame(
             pf,
             field=field,
             dpi=dpi,
@@ -82,47 +125,3 @@ def generate_animation(
     imageio.mimsave(output_path, frames, duration=duration, loop=0)
     print(f"[SUCCESS] Saved animation: {output_path}")
     return output_path
-
-
-def plot_field_with_amr_overlay(
-    pf: Plotfile,
-    field: str,
-    dpi: int = 150,
-    figsize: tuple = (14, 8),
-    **kwargs: Any,
-) -> bytes:
-    """Render a single frame to a PNG byte buffer.
-
-    Parameters
-    ----------
-    pf :
-        A :class:`Plotfile` instance.
-    field :
-        Logical field name.
-    dpi :
-        Figures-per-inch.
-    figsize :
-        Figure size in inches.
-    **kwargs :
-        Passed to :func:`plots.plot_field`.
-
-    Returns
-    -------
-    bytes
-        Raw PNG data.
-    """
-    import io
-    from .plots import plot_field
-
-    buf = io.BytesIO()
-    ax = plot_field(
-        pf, field, dpi=dpi, figsize=figsize, return_ax=True, **kwargs
-    )
-    if ax is not None:
-        fig = ax.figure
-        fig.savefig(buf, format="png", dpi=dpi)
-        plt.close(fig)
-    else:
-        plt.close()
-    buf.seek(0)
-    return buf.read()

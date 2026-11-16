@@ -108,10 +108,10 @@ def plot_field(
         The axis used for plotting, or ``None`` (when *return_ax* is
         ``False``).
     """
-    from .fields import extract_field, get_field_coordinates
+    from ..io.fields import extract_field, get_field_coordinates
 
     data = pf.extract(field, **kwargs)
-    x, y, x_lo, x_hi, y_lo, y_hi = get_field_coordinates(pf._ds, level=kwargs.get("level", 0))
+    x, y, x_lo, x_hi, y_lo, y_hi = get_field_coordinates(pf.ds, level=kwargs.get("level", 0))
 
     if extent is None:
         extent = [x_lo, x_hi, y_lo, y_hi]
@@ -201,7 +201,7 @@ def plot_field_with_amr_overlay(
     -------
     Axes or None
     """
-    from .amr import get_meshblock_rectangles
+    from ..io.amr import get_meshblock_rectangles
 
     ax = plot_field(
         pf,
@@ -223,7 +223,7 @@ def plot_field_with_amr_overlay(
         ax = plt.gca()
 
     if show_amr and pf.num_levels > 0:
-        rects = get_meshblock_rectangles(pf._ds)
+        rects = get_meshblock_rectangles(pf.ds)
         if amr_level_colors is None:
             levels = sorted(set(r.level for r in rects)) if rects else [0]
             amr_level_colors = plt.cm.tab20(

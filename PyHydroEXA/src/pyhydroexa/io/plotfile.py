@@ -11,7 +11,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, List, Optional, Sequence, Set
+from typing import Any, Iterator, List, Optional, Sequence, Set
 
 try:
     import yt
@@ -116,7 +116,7 @@ class Plotfile:
             )
 
         self._path: str = path
-        self._ds: Optional["yt.Dataset"] = None
+        self._dataset: Optional["yt.Dataset"] = None
         self._metadata: Optional[PlotfileMetadata] = None
 
     # -- public properties --------------------------------------------------
@@ -127,79 +127,88 @@ class Plotfile:
         return self._path
 
     @property
+    def ds(self) -> "yt.Dataset":
+        """The underlying ``yt`` dataset, loaded on first access.
+
+        Reading is deferred so that building a :class:`PlotfileSeries`
+        over a thousand plotfiles costs a thousand directory checks
+        rather than a thousand ``yt`` parses.
+        """
+        if self._dataset is None:
+            self._dataset = yt.load(self._path)
+            self._metadata = PlotfileMetadata(
+                path=self._path,
+                time=float(self._dataset.current_time),
+                dim=int(self._dataset.dimensionality),
+                domain_lo=tuple(float(v) for v in self._dataset.domain_left_edge),
+                domain_hi=tuple(float(v) for v in self._dataset.domain_right_edge),
+                field_names=tuple(
+                    f[1] if len(f) > 1 else str(f)
+                    for f in sorted(self._dataset.field_list)
+                ),
+                num_levels=int(self._dataset.index.max_level),
+            )
+        return self._dataset
+
+    @property
+    def metadata(self) -> PlotfileMetadata:
+        """Cached metadata, parsed from the header on first access."""
+        if self._metadata is None:
+            self.ds  # loads and fills _metadata
+        return self._metadata
+
+    @property
     def time(self) -> float:
         """Simulation time in seconds."""
-        return self._metadata.time
+        return self.metadata.time
 
     @property
     def dim(self) -> int:
         """Spatial dimensionality."""
-        return self._metadata.dim
+        return self.metadata.dim
 
     @property
     def domain_lo(self) -> tuple:
         """Lower corner of the computational domain."""
-        return self._metadata.domain_lo
+        return self.metadata.domain_lo
 
     @property
     def domain_hi(self) -> tuple:
         """Upper corner of the computational domain."""
-        return self._metadata.domain_hi
+        return self.metadata.domain_hi
 
     @property
     def field_names(self) -> tuple:
         """Logical field names available in the plotfile."""
-        return self._metadata.field_names
+        return self.metadata.field_names
 
     @property
     def num_levels(self) -> int:
         """Number of AMR levels (0 means single-level / root only)."""
-        return self._metadata.num_levels
+        return self.metadata.num_levels
 
     @property
     def domain_dimensions(self) -> tuple:
         """Grid dimensions at each AMR level."""
-        return tuple(self._ds.domain_dimensions)
-
-    @property
-    def _ds(self) -> "yt.Dataset":
-        if self._ds is None:
-            self._ds = yt.load(self._path)
-            self._metadata = PlotfileMetadata(
-                path=self._path,
-                time=float(self._ds.current_time),
-                dim=int(self._ds.dimensionality),
-                domain_lo=tuple(
-                    float(v) for v in self._ds.domain_left_edge
-                ),
-                domain_hi=tuple(
-                    float(v) for v in self._ds.domain_right_edge
-                ),
-                field_names=tuple(
-                    f[1] if len(f) > 1 else str(f)
-                    for f in sorted(self._ds.field_list)
-                ),
-                num_levels=int(self._ds.num_levels),
-            )
-        return self._ds
+        return tuple(self.ds.domain_dimensions)
 
     # -- methods ------------------------------------------------------------
 
     def extract(self, field_name: str, level: int = 0) -> "np.ndarray":
         """Extract a field as a NumPy array (delegates to :mod:`fields`)."""
         from .fields import extract_field
-        return extract_field(self._ds, field_name, level=level)
+        return extract_field(self.ds, field_name, level=level)
 
     def get_coordinates(self, level: int = 0) -> "np.ndarray":
         """Return cell-centred coordinate arrays (delegates to :mod:`fields`)."""
         from .fields import get_field_coordinates
-        x, y, _, _, _, _ = get_field_coordinates(self._ds, level=level)
+        x, y, _, _, _, _ = get_field_coordinates(self.ds, level=level)
         return x, y
 
     def __repr__(self) -> str:
         return (
             f"Plotfile(path='{self._path}', time={self.time:.6f}, "
-            f"fields={self._metadata.field_names})"
+            f"fields={self.metadata.field_names})"
         )
 
 
@@ -254,15 +263,18 @@ def _discover_plotfiles(
 class PlotfileSeries:
     """Ordered sequence of plotfiles discovered from a glob pattern.
 
-    Supports iteration, indexing, and animation generation.  Plotfiles
-    are loaded lazily — only one is open at a time by default.
+    Supports iteration and indexing.  Plotfiles are loaded lazily — only
+    one is open at a time by default.
 
     Examples
     --------
     >>> series = PlotfileSeries("plt*")
     >>> for pf in series:
     ...     print(pf.time)
-    >>> series.animate(field="h", output="evolution.gif")
+
+    Animation lives in :mod:`pyhydroexa.plotting`, so that reading a
+    series never drags matplotlib in:
+    ``generate_animation(series, field="h", output="evolution.gif")``.
     """
 
     def __init__(
@@ -319,37 +331,6 @@ class PlotfileSeries:
     def times(self) -> List[float]:
         """Simulation times for all plotfiles."""
         return [pf.time for pf in self]
-
-    def animate(
-        self,
-        field: str,
-        output: str = "animation.gif",
-        duration: float = 0.2,
-        **plot_kwargs: Any,
-    ) -> str:
-        """Generate an animation GIF from the sequence.
-
-        Parameters
-        ----------
-        field :
-            Logical field name to animate.
-        output :
-            Output file path.
-        duration :
-            Frame duration in seconds.
-        **plot_kwargs :
-            Additional keyword arguments passed to
-            :func:`plot_field_with_amr_overlay`.
-
-        Returns
-        -------
-        str
-            Path to the generated GIF.
-        """
-        from .animation import generate_animation
-        return generate_animation(
-            self, field, output=output, duration=duration, **plot_kwargs
-        )
 
     def __repr__(self) -> str:
         return (

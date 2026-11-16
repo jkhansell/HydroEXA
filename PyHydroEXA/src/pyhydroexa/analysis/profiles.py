@@ -88,7 +88,7 @@ def extract_profile(
     if axis not in ("x", "y"):
         raise ValueError(f"axis must be 'x' or 'y', got '{axis}'")
 
-    from .fields import extract_field, get_field_coordinates
+    from ..io.fields import extract_field, get_field_coordinates
 
     data = extract_field(ds, field_name, level=level, aliases=aliases)
     x, y, x_lo, x_hi, y_lo, y_hi = get_field_coordinates(ds, level=level)

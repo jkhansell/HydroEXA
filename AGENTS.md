@@ -254,7 +254,10 @@ The root `pyproject.toml` is a **uv workspace** whose only member is `PyHydroEXA
 (distribution name `pyhydroexa`). Install everything with `uv sync` from the repo root.
 
 - Preprocessing: raster/DEM → HydroEXA HDF5 (`preprocessing/`)
-- Postprocessing: plotfile readers, AMR-aware plotting, animation (`postprocessing/`)
+- io: plotfile readers, field extraction, AMR block geometry (`io/`)
+- analysis: reusable reductions, e.g. line profiles (`analysis/`)
+- plotting: field maps, AMR overlays, animations (`plotting/`)
+- audit: SLOC entropy + include/import coupling of the source tree (`audit/`)
 - CLI entry points: `pyhydroexa`, `pyhydroexa-inspect`, `pyhydroexa-plot`, `pyhydroexa-animate`
 - Dependencies: numpy, scipy, h5py, matplotlib, imageio, yt, geopandas, shapely, rasterio,
   pyogrio, fiona, polars (plus optional `gdal` wheels on Linux)

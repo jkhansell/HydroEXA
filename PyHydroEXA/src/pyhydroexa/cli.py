@@ -13,18 +13,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
-
-try:
-    import yt
-    HAS_YT = True
-except ImportError:
-    HAS_YT = False
 
 
 def _inspect(args: argparse.Namespace) -> None:
     """Print metadata for a plotfile."""
-    from .plotfile import Plotfile
+    from .io import Plotfile
 
     pf = Plotfile(args.path)
     print(f"Path       : {pf.path}")
@@ -37,8 +30,8 @@ def _inspect(args: argparse.Namespace) -> None:
 
 def _plot(args: argparse.Namespace) -> None:
     """Plot a field from a single plotfile."""
-    from .plotfile import Plotfile
-    from .plots import plot_field_with_amr_overlay
+    from .io import Plotfile
+    from .plotting import plot_field_with_amr_overlay
 
     pf = Plotfile(args.path)
     kwargs = {}
@@ -58,8 +51,8 @@ def _plot(args: argparse.Namespace) -> None:
 
 def _animate(args: argparse.Namespace) -> None:
     """Generate an animation from a plotfile series."""
-    from .plotfile import PlotfileSeries
-    from .animation import generate_animation
+    from .io import PlotfileSeries
+    from .plotting import generate_animation
 
     series = PlotfileSeries(args.pattern)
     kwargs = {}
@@ -74,7 +67,7 @@ def _animate(args: argparse.Namespace) -> None:
 
 def _list_fields(args: argparse.Namespace) -> None:
     """List available fields in a plotfile."""
-    from .plotfile import Plotfile
+    from .io import Plotfile
 
     pf = Plotfile(args.path)
     for name in pf.field_names:

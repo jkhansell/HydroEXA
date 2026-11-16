@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quick smoke test for pyhydroexa.postprocessing.
+"""Quick smoke test for the pyhydroexa reader/analysis/plotting layers.
 
 Run this first to verify the package imports and basic functionality
 work before running the full validation suite.
@@ -39,24 +39,24 @@ def main() -> None:
     # 1. Package import
     print("\n[1] Package imports")
     check("import pyhydroexa", __import__, "pyhydroexa")
-    check("from pyhydroexa.postprocessing import Plotfile",
-          __import__, "pyhydroexa.postprocessing", fromlist=["Plotfile"])
-    check("from pyhydroexa.postprocessing import PlotfileSeries",
-          __import__, "pyhydroexa.postprocessing", fromlist=["PlotfileSeries"])
-    check("from pyhydroexa.postprocessing import plot_field",
-          __import__, "pyhydroexa.postprocessing", fromlist=["plot_field"])
-    check("from pyhydroexa.postprocessing import plot_field_with_amr_overlay",
-          __import__, "pyhydroexa.postprocessing", fromlist=["plot_field_with_amr_overlay"])
-    check("from pyhydroexa.postprocessing import extract_profile",
-          __import__, "pyhydroexa.postprocessing", fromlist=["extract_profile"])
-    check("from pyhydroexa.postprocessing import generate_animation",
-          __import__, "pyhydroexa.postprocessing", fromlist=["generate_animation"])
+    check("from pyhydroexa.io import Plotfile",
+          __import__, "pyhydroexa.io", fromlist=["Plotfile"])
+    check("from pyhydroexa.io import PlotfileSeries",
+          __import__, "pyhydroexa.io", fromlist=["PlotfileSeries"])
+    check("from pyhydroexa.plotting import plot_field",
+          __import__, "pyhydroexa.plotting", fromlist=["plot_field"])
+    check("from pyhydroexa.plotting import plot_field_with_amr_overlay",
+          __import__, "pyhydroexa.plotting", fromlist=["plot_field_with_amr_overlay"])
+    check("from pyhydroexa.analysis import extract_profile",
+          __import__, "pyhydroexa.analysis", fromlist=["extract_profile"])
+    check("from pyhydroexa.plotting import generate_animation",
+          __import__, "pyhydroexa.plotting", fromlist=["generate_animation"])
     check("from pyhydroexa.cli import main",
           __import__, "pyhydroexa.cli", fromlist=["main"])
 
     # 2. Field aliases
     print("\n[2] Field aliases")
-    from pyhydroexa.postprocessing import DEFAULT_ALIASES
+    from pyhydroexa.io import DEFAULT_ALIASES
     check("DEFAULT_ALIASES has 'h'", lambda: "h" in DEFAULT_ALIASES)
     check("DEFAULT_ALIASES has 'hu'", lambda: "hu" in DEFAULT_ALIASES)
     check("DEFAULT_ALIASES has 'hv'", lambda: "hv" in DEFAULT_ALIASES)
