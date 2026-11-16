@@ -44,7 +44,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # No submodules: the docs build reads `include/` for Doxygen and the
+      # Python sources for autodoc, and touches neither tpl/amrex nor
+      # tpl/hdf5.  Cloning them costs a minute and couples this job to
+      # third-party history it does not use.
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: Install doxygen and graphviz
         run: |
