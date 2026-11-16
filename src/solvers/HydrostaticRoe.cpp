@@ -2,6 +2,8 @@
 #include <solvers/kernels/HydrostaticRoe.H>
 #include <boundaries/BCFill.H>
 #include <utils/Constants.H>
+#include <AMReX_ParallelDescriptor.H>
+#include <AMReX_Print.H>
 
 amrex::Real
 HydrostaticRoe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
@@ -15,8 +17,8 @@ HydrostaticRoe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
     const amrex::MultiFab& S = U[lev];
     const amrex::MultiFab& Terrain = terrain[lev];
 
-    amrex::ReduceOps<amrex::ReduceOpMin> reduce_op;
-    amrex::ReduceData<amrex::Real> reduce_data(reduce_op);
+    amrex::ReduceOps<amrex::ReduceOpMin, amrex::ReduceOpMax> reduce_op;
+    amrex::ReduceData<amrex::Real, amrex::Real> reduce_data(reduce_op);
 
     using ReduceTuple = decltype(reduce_data)::Type;
 
@@ -38,11 +40,12 @@ HydrostaticRoe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
                 {
                     
                     if (std::abs(z_arr(i,j,k,0) - (-9999.0)) < Tolerances::TOL10()) {
-                        return 1.e30;
+                        return {1.e30, 0.0};
                     }
 
                     amrex::Real h = arr(i,j,k,0);
                     amrex::Real dt_cell = 1.e6; 
+                    amrex::Real maxu = 0.0;
                     
                     if (h > Tolerances::TOL12()) { 
                         amrex::Real u = arr(i,j,k,1) / h;
@@ -54,16 +57,30 @@ HydrostaticRoe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
                         const amrex::Real speed_y = std::abs(v) + c;
 
                         dt_cell = 1.0 / (speed_x / dxx + speed_y / dyy);
+                        maxu = std::max(std::abs(u), std::abs(v));
                     }
-                    return dt_cell;
+                    return {dt_cell, maxu};
                 }
             );
         }
     }
 
     // Extract the LOCAL minimum from the GPU to the CPU
-    ReduceTuple local_dt = reduce_data.value();
-    amrex::Real dt_est = amrex::get<0>(local_dt);
+    ReduceTuple local = reduce_data.value();
+    amrex::Real dt_est = amrex::get<0>(local);
+    amrex::Real max_vel = amrex::get<1>(local);
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        amrex::Print() << "[compute_dt] lev=" << lev << " dt=" << dt_est
+                       << " max|vel|=" << max_vel << "\n";
+    }
+
+    // dt collapse = single-cell velocity explosion. Stop instead of spinning
+    // at dt=0; the per-step max|vel| trace above shows the growth history.
+    if (dt_est < 1.e-12) {
+        amrex::Abort("compute_dt: dt collapsed (velocity explosion). "
+                     "Use dipole_probe.py on the latest plotfile to locate the offending cell.");
+    }
 
     // Apply CFL multiplier to the global safe estimate
     dt_est *= cfl;
@@ -423,7 +440,7 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
     // only by the hydrostatic pressure correction and coincide on a flat bed.
     amrex::MultiFab FL[AMREX_SPACEDIM];
     amrex::MultiFab FR[AMREX_SPACEDIM];
-    amrex::MultiFab U_ext, Terrain_ext;
+    amrex::MultiFab U_ext, Terrain_ext, Eta_ext;
 
     for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
     {
@@ -438,6 +455,7 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
     // MUSCL reconstruction and flux calculation need 2 ghosts
     U_ext.define(ctx.grids[lev], ctx.dmap[lev], U_n.nComp(), 2); 
     Terrain_ext.define(ctx.grids[lev], ctx.dmap[lev], Terrain.nComp(), 2);
+    Eta_ext.define(ctx.grids[lev], ctx.dmap[lev], 1, 2);
 
     // ----------------------------------- -------------------------------------
     // 3. COMPUTE DIRECTIONAL DUAL EFFECTIVE FLUXES
@@ -447,8 +465,35 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
     const amrex::Real dt_local = dt;
 
     // fill coarse/fine boundaries
-    ctx.FillPatch(lev, time, U_ext, ctx.UBCs, 0, U_o.nComp());
+    //
+    // Rule R1 (plans/IdealAMR.md): the free surface eta is what crosses the
+    // coarse-fine boundary (constant-preserving); momenta cross as momenta;
+    // h is then REBUILT on the grown region from eta and this level's own z.
+    // Filling U_ext with h directly (the previous behavior) transports the
+    // coarse level's h into the fine ghosts, and eta_ghost = h_coarse + z_fine
+    // is NOT the lake surface on a sloping bed — that mismatch drove the
+    // slow dipole that collapsed T1a at t≈20.9.
+    ctx.FillPatchEta(lev, time, Eta_ext, ctx.EtaBCs, 0, 1);
+    ctx.FillPatch(lev, time, U_ext, ctx.UBCs, 1, U_n.nComp() - 1);   // momenta only
     ctx.FillPatchTerrain(lev, time, Terrain_ext, ctx.TerrainBCs, 0, Terrain.nComp());
+
+    // Rebuild h over the full grown region (Rule R3 primitive). This also
+    // overwrites the valid comp0 with max(0, eta - z), which is idempotent
+    // for a consistent state and repairs any inconsistency.
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+    for (amrex::MFIter mfi(U_ext, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+    {
+        auto const& u   = U_ext.array(mfi);
+        auto const& e   = Eta_ext.const_array(mfi);
+        auto const& z   = Terrain_ext.const_array(mfi);
+        amrex::ParallelFor(mfi.growntilebox(),
+        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            u(i,j,k,0) = std::max(amrex::Real(0.0), e(i,j,k,0) - z(i,j,k,0));
+        });
+    }
 
 #ifdef AMREX_USE_OMP    
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
