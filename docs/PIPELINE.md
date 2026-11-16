@@ -37,6 +37,7 @@ Reads from the inputs file via `amrex::ParmParse`:
 | `HydroEXA` | `lo_bc`, `hi_bc` | Physical boundary condition types (0-5) per direction |
 | `amr` | `max_level` | Maximum AMR refinement level |
 | `amr` | `regrid_int` | Regridding frequency (iterations) |
+| `amr` | `n_error_buf` | Patch margin ahead of tagged cells, in level-0 cells (default 1) — see §8a |
 | `amr` | `do_reflux` | Enable coarse-fine flux correction |
 | `amr` | `do_subcycle` | Enable temporal subcycling at fine levels |
 | `amr` | `terrain_ref_lev` | AMR level at which terrain HDF5 data is loaded |
@@ -199,6 +200,77 @@ TimeStepWithSubcycling(lev, time, iteration):
         // Downward interpolation (non-conservative)
         AverageDownTo(lev, U_new)
 ```
+
+### 8a. Regrid cadence must keep up with fronts (operational rule)
+
+Regridding is not bookkeeping — it is what keeps a moving front **inside** the
+refined patch. If the patch is re-cut too rarely, the front leaves level 1,
+is captured at level-0 resolution for the rest of the interval, and its error
+is then carried downstream. On a steady plateau (dam break, bore, hydraulic
+jump) that error is frozen into the fluid and never decays, so the damage is
+permanent and looks like an instability *inside* level 1 rather than a patch
+placement problem. Nothing crashes and conservation still holds: it shows up
+only as a 20-30 % accuracy loss against a uniform run at the fine resolution.
+
+The budget is a distance, not a step count:
+
+```
+    regrid_int * dt[0] * U_front   <   n_error_buf * dx[0]
+```
+
+| symbol | input / source | meaning |
+|---|---|---|
+| `regrid_int` | `amr.regrid_int` | level-0 steps between regrids |
+| `dt[0]` | `cfl * dx[0] / lambda_max` | coarse-level timestep |
+| `U_front` | physics | speed of the tracked feature (shock, bore, wet/dry front) |
+| `n_error_buf` | `amr.n_error_buf` (**default 1 cell**) | level-0 cells of margin kept ahead of the tagged region |
+
+Substituting `dt[0]` and dividing by `dx[0]` gives the usable form — *between
+regrids the front may travel at most `n_error_buf` coarse cells*:
+
+```
+    regrid_int * cfl * (U_front / lambda_max)   <   n_error_buf
+```
+
+For the SWASHES dam break the shock runs at `U_front = 0.21 m/s` and
+`lambda_max = sqrt(g h_L) = 0.22 m/s`, so with `cfl = 0.5` the front advances
+≈ 0.5 coarse cells per step (measured: 0.24 `dx0` per step, because `dt` is
+CFL-limited by the faster of the two wave families). The 1-cell default margin
+therefore buys only ~2-4 steps, and the stock `regrid_int = 50` of
+`solvers/roe/inputs_amr` is an order of magnitude past that — the shock walks
+0.23 m, twelve coarse cells, past the patch edge between re-cuts, and the edge
+was behind the shock in 25 % of frames.
+
+The measurement agrees: the cadence this rule predicts (~2-4 steps) and the one
+the sweep found best (`regrid_int = 5` → 101-105 % of the uniform fine run)
+match, while 50 fails. Re-cutting costs nothing here — the regrid is cheap next
+to the flux update on the same cells.
+
+**Procedure for a new SWASHES / SWE case**
+
+1. Estimate `U_front` (Rankine-Hugoniot jump, or the analytical solution) and
+   `lambda_max = max(|u| + sqrt(g h))` from the initial condition.
+2. Compute the safe cadence and use the smaller of it and the AMReX default:
+
+   ```text
+   regrid_int_max = floor( n_error_buf * lambda_max / (cfl * U_front) )
+   ```
+
+   With `n_error_buf = 4`, `cfl = 0.5` and `U_front/lambda_max ≈ 0.4` this is
+   ~20 steps.
+3. Verify, don't assume: plot `patch_edge - front_position` over time (the
+   `tests/dambreak` renderer does this) and require it to stay **positive** in
+   every frame.
+4. Score against a uniform run at the fine resolution. Refinement must earn its
+   keep: `gain_base > 1` versus the level-0 run, and `gain_stable ≈ 1` versus
+   the level-1-dx run. On the dam break both knobs recover the same deficit
+   from opposite sides — `n_error_buf = 4` gave 95 % of the uniform fine run,
+   `regrid_int = 5` gave 101-105 % — at no measurable runtime cost.
+
+**Do not** conclude "AMR is broken" or "the flux is wrong" before checking
+this: on the dam break, reflux was load-bearing (65 % without it) and
+subcycled time interpolation cost ~14 points, but regrid cadence alone
+accounted for the entire remaining deficit.
 
 ---
 

@@ -62,21 +62,26 @@ set paths, or invoke cmake yourself. It handles, in order:
    Consequence: **anything you `module load` before running the script is silently
    wiped** by the profile's `module purge`. Never rely on pre-loaded modules —
    add the module to the machine profile instead.
-3. **Stage guards** — each stage is skipped when its install already exists:
+3. **Stage guards** — the third-party stages are skipped when their install
+   already exists:
    - HDF5: skipped if `install_<target>/hdf5/` is populated
    - AMReX: skipped if `install_<target>/amrex_<PRECISION>/` is populated
-   - HydroEXA: skipped (exit 0, "already installed") if
-     `install_<target>/hydroexa_<PRECISION>/bin/HydroEXA` exists
+   - HydroEXA: **never skipped** — the stage always reconfigures, rebuilds and
+     installs, so `bash scripts/build_HydroEXA.sh …` is safe to re-run after an
+     edit (object files are reused; only the CMake cache is deleted).
 
-### Forcing rebuilds
+### Rebuilding after an edit
 
-The guards check *installs*, not source freshness. After editing solver sources,
-`build_HydroEXA.sh` will report "already installed" and do nothing — this is the
-intended fast path, and rebuilding is one command:
+The guards check *installs*, not source freshness, but the HydroEXA stage has no
+guard: re-running the script always brings the binary up to date.
 
 ```bash
-# Only sources changed (the usual case):
-rm -rf install_<target>/hydroexa_<PRECISION> build_<target>/hydroexa_<PRECISION>
+# Edit-compile loop, no reconfigure (fastest; needs the machine env in scope):
+source machines/<target>
+cmake --build  build_<target>/hydroexa_<PRECISION> -j 16
+cmake --install build_<target>/hydroexa_<PRECISION>
+
+# Full pipeline (reconfigures from scratch): HDF5/AMReX skipped, HydroEXA rebuilt
 bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
 
 # Toolchain/third-party changed (AMReX, HDF5, machine profile):
@@ -84,9 +89,13 @@ rm -rf install_<target>/amrex_<PRECISION>   # or install_<target>/hdf5, or both
 bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
 ```
 
-CMake re-runs configure from scratch each time (the script deletes
+Never `rm -rf` a HydroEXA build/install tree for an ordinary source edit — the
+incremental path above is a few seconds, a clean configure is minutes.
+
+The script's copy of the build re-runs configure from scratch each time (it deletes
 `CMakeCache.txt` in the HydroEXA stage), so there is no incremental-cache staleness
-to worry about — only the install guards.
+to worry about; the direct `cmake --build` path keeps the cache and is therefore
+the faster loop once the tree is configured.
 
 ### CMake version coupling (Kabré gotcha)
 
@@ -229,7 +238,7 @@ Run from the test directory (input paths are relative). Test cases:
 
 | Directory | Purpose |
 |-----------|---------|
-| `tests/dambreak/` | **E2E dam-break battery (SWASHES benchmark)**: shared `RectangularDambreak.h5` + analysis scripts at the parent; `solvers/{roe,hydrostatic_roe}/` hold input variants (`amr`, `amr_noreflux`, `amr_nosubcycle`, `single_level`) + per-solver test docs; all artifacts in `outputs/<solver>/`. Runner: `bash run.sh <solver> <variant> <exe> [np]`. Intended for CI/CD. |
+| `tests/dambreak/` | **E2E dam-break battery (SWASHES benchmark)**: shared `RectangularDambreak.h5` + analysis scripts at the parent; `solvers/{roe,hydrostatic_roe}/` hold input variants (`amr`, `amr_noreflux`, `amr_nosubcycle`, `amr_fastregrid`, `amr_buf`, `single_level`, `single_level_fine`) + per-solver test docs; all artifacts in `outputs/<solver>/`. Runner: `bash run.sh <solver> <variant> <exe> [np] [tag]` (`HYDROEXA_SKIP_PLOTS=1` = solve only, for bisects). Intended for CI/CD. Accuracy is scored as length-weighted L1/L2/Linf against the exact solution and against both uniform yardsticks (`single_level_fine` = level-1 dx = stable, `single_level` = level-0 dx = base); `metrics_table.py` emits the CSV scoreboard. The `regrid_int=5` variant reaches parity with the uniform fine run, which pins the AMR accuracy deficit on regrid cadence rather than the flux or the coupling. |
 | `tests/dambreakNoAMR` | legacy dam break on a **different domain** (51.2×1.6) — not a control for `tests/dambreak/`; the fixed-grid reference there is `solvers/roe/inputs_single_level` |
 | `tests/dambreakcircle` | circular dam break, includes DEM/TIFF → HDF5 tooling |
 | `tests/LakeAtRestAugmentedRoe` | stale dir — its `inputs` is a dam-break config (`model="Roe"`); pending rename/removal |
