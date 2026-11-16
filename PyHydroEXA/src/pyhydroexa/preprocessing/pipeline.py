@@ -4,7 +4,8 @@ Orchestrates the full conversion from HydroEXA input files and user-
 provided physical fields into a single HDF5 file consumable by the
 HydroEXA C++ solver.
 
-Usage:
+Usage::
+
     from pyhydroexa.preprocessing import preprocess
 
     preprocess(

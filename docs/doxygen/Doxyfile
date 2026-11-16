@@ -1,0 +1,83 @@
+# --------------------------------------------------------------------------
+# HydroEXA C++ API -- Doxygen configuration
+#
+# Deliberately directory-based: INPUT names a directory, and Breathe consumes
+# the XML tree from docs/api/cpp.rst via a single \c doxygenindex directive.
+# Splitting, merging or moving solver files therefore needs no change here or
+# in the Sphinx tree.
+#
+# Scaffolding mode: EXTRACT_ALL=YES + WARN_IF_UNDOCUMENTED=NO renders the real
+# structure of the solver while the doc-comment pass is still pending.  The
+# gate that ends scaffolding is WARN_IF_UNDOCUMENTED=YES + WARN_AS_ERROR=YES.
+#
+# Requires a C++17-capable doxygen (the prebuilt 1.18 linux binary needs
+# libstdc++ from gcc >= 12; on Kabre, "module load gcc/13.4.0" first).
+# --------------------------------------------------------------------------
+
+PROJECT_NAME           = "HydroEXA"
+PROJECT_BRIEF          = "GPU-accelerated AMR shallow-water solver on AmReX"
+OUTPUT_DIRECTORY       = .
+CREATE_SUBDIRS         = NO
+ALLOW_UNICODE_NAMES    = YES
+
+# --- Input: directories, never file lists --------------------------------
+# Public headers only.  src/*.cpp is deliberately excluded: its AMReX device
+# lambdas (ParallelFor closures) produce declarations that Sphinx's C++ domain
+# cannot parse, which turns the index into a wall of parser warnings.  The
+# implementation is covered by the prose in docs/PIPELINE.md; add source files
+# here only if/when they carry doc-comments worth indexing.
+INPUT                  = ../../include
+FILE_PATTERNS          = *.H *.h *.hpp *.cpp
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */__pycache__/* \
+                         */build_*/* \
+                         */install_*/*
+EXCLUDE_SYMLINKS       = YES
+
+# --- Extraction ----------------------------------------------------------
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_PACKAGE        = NO
+EXTRACT_STATIC         = NO
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+# --- Language / preprocessing -------------------------------------------
+OPTIMIZE_OUTPUT_FOR_C  = NO
+TYPEDEF_HIDES_STRUCT   = NO
+MARKDOWN_SUPPORT       = YES
+JAVADOC_AUTOBRIEF      = YES
+TAB_SIZE                = 4
+ENABLE_PREPROCESSING   = YES
+SEARCH_INCLUDES        = NO
+INCLUDE_PATH           =
+MACRO_EXPANSION        = NO
+# AMReX's host/device decorations are meaningless to a parser; erase them so
+# the kernels and ParallelFor lambdas are documented as ordinary functions.
+PREDEFINED             = AMREX_GPU_DEVICE= \
+                         AMREX_GPU_HOST= \
+                         AMREX_GPU_HOST_DEVICE= \
+                         AMREX_GPU_MANAGED= \
+                         AMREX_GPU_CONSTANT=
+CLANG_ASSISTED_PARSING = NO
+
+# --- Warnings (scaffolding mode) ----------------------------------------
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_IF_INCOMPLETE_DOC = NO
+WARN_AS_ERROR          = NO
+
+# --- Output: XML for Breathe only ---------------------------------------
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+GENERATE_RTF           = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+XML_PROGRAMLISTING     = NO
+GENERATE_TREEVIEW      = NO
+HAVE_DOT               = NO

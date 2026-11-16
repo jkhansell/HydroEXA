@@ -543,6 +543,14 @@ _site/
 site/
 docs/_build/
 docs/build/
+# Sphinx/Doxygen generated sources (never committed)
+docs/doxygen/xml/
+docs/doxygen/html/
+docs/api/generated/
+tools/out/
+
+# ...but the docs build entry point is source, not a CMake artifact
+!docs/Makefile
 *.aux
 *.bbl
 *.blg
