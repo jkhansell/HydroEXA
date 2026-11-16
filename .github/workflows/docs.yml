@@ -6,11 +6,15 @@ name: docs
 # Blocking: the C++ doc-comment pass is complete, so the Doxyfile treats an
 # undocumented entity as an error (WARN_IF_UNDOCUMENTED + WARN_AS_ERROR) and
 # Sphinx runs with -W.  A doc comment that goes missing fails the build rather
-# than only printing a warning into the log.
+# than printing a warning into the log.
+#
+# Branches: `develop` integrates and `main` releases.  Both build, so a docs
+# regression is caught before it reaches a release, but only `main` deploys --
+# API pages rendered from unreleased code never reach the published site.
 
 on:
   push:
-    branches: [AmrCore_refactor, main]
+    branches: [develop, main]
   pull_request:
     paths:
       - "docs/**"
@@ -18,6 +22,7 @@ on:
       - "src/**"
       - "PyHydroEXA/**"
       - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -62,7 +67,8 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/AmrCore_refactor' || github.ref == 'refs/heads/main'
+    # Only a release branch publishes; a develop build is a gate, not a site.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
