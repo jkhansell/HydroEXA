@@ -77,11 +77,7 @@ source "${HYDROEXA_DIR}/scripts/build_HDF5.sh"
 print_banner "${BLUE}" "Step 2/3: Building AMReX"
 source "${HYDROEXA_DIR}/scripts/build_AMReX.sh"
 
-# --- Step 3: HydroEXA ---
-if [ -d "${HYDROEXA_INSTALL}" ] && [ -f "${HYDROEXA_INSTALL}/bin/HydroEXA" ]; then
-    print_banner "${GREEN}" "HydroEXA already installed for ${TARGET}"
-    exit 0
-fi
+# --- Step 3: HydroEXA --
 
 print_banner "${BLUE}" "Step 3/3: Building HydroEXA for ${TARGET}"
 
