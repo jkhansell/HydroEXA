@@ -40,6 +40,21 @@ uv run pyhydroexa-audit --markdown docs/architecture.md   # regenerate
 uv run pyhydroexa-audit --top 5                            # quick look
 ```
 
+The committed report is measured from a **clean worktree at HEAD**, not from the
+working tree, so that uncommitted edits and untracked scratch scripts cannot
+inflate the numbers it attributes to a commit:
+
+```bash
+git worktree add --detach /tmp/audit-tree/HydroEXA HEAD
+uv run pyhydroexa-audit --root /tmp/audit-tree/HydroEXA \
+    --markdown docs/architecture.md
+git worktree remove /tmp/audit-tree/HydroEXA
+```
+
+Which means the report only moves when code is committed: a hand-edited file, or
+a plotfile dropped into a test directory, is not part of the measurement until
+it is part of the tree.
+
 The metrics are deliberately few and blunt:
 
 - **comment-aware SLOC** — comments and docstrings are counted separately, so

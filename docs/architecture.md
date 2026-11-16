@@ -2,7 +2,7 @@
 
 # Code architecture audit
 
-Measured at `f831659` on 2026-11-16 01:11 UTC from `HydroEXA`.
+Measured at `a44109f` on 2026-11-16 01:18 UTC from `HydroEXA`.
 
 Counts are comment-aware SLOC: docstrings and comments are counted separately, blank lines are excluded. Generated and vendored trees (`tpl/`, `build*/`, `docs/_build/`, plotfiles) are skipped.
 
@@ -10,28 +10,28 @@ Counts are comment-aware SLOC: docstrings and comments are counted separately, b
 
 | Language | Files | SLOC | Comment lines | Comments / SLOC |
 | --- | ---: | ---: | ---: | ---: |
-| c | 36 | 3,950 | 705 | 0.18 |
-| python | 63 | 8,170 | 2,774 | 0.34 |
-| shell | 7 | 316 | 194 | 0.61 |
-| **all** | **106** | **12,436** | **3,673** | 0.30 |
+| c | 36 | 3,880 | 953 | 0.25 |
+| python | 61 | 7,874 | 2,711 | 0.34 |
+| shell | 5 | 229 | 131 | 0.57 |
+| **all** | **102** | **11,983** | **3,795** | 0.32 |
 
 ## Code mass distribution
 
 | Measure | Value | Reading |
 | --- | ---: | --- |
-| Normalized entropy | 0.932 | 1.0 = every file the same size; low = a few files hold the code |
-| Effective file count | 59.8 | the 106 files behave like this many equal ones |
-| Largest single file | 546 SLOC | 4.4% of the tree (`src/state/AmrMeshState_AMR.cpp`) |
+| Normalized entropy | 0.933 | 1.0 = every file the same size; low = a few files hold the code |
+| Effective file count | 58.2 | the 102 files behave like this many equal ones |
+| Largest single file | 524 SLOC | 4.4% of the tree (`src/state/AmrMeshState_AMR.cpp`) |
 
 Heaviest files (top 10):
 
 | File | SLOC | Comments |
 | --- | ---: | ---: |
-| `src/state/AmrMeshState_AMR.cpp` | 546 | 61 |
-| `src/solvers/HydrostaticRoe.cpp` | 463 | 88 |
-| `src/solvers/Roe.cpp` | 430 | 95 |
+| `src/state/AmrMeshState_AMR.cpp` | 524 | 61 |
+| `src/solvers/HydrostaticRoe.cpp` | 447 | 84 |
+| `src/solvers/Roe.cpp` | 413 | 90 |
 | `PyHydroEXA/tests/validate_full.py` | 378 | 89 |
-| `src/state/AmrMeshState_Utils.cpp` | 352 | 55 |
+| `src/state/AmrMeshState_Utils.cpp` | 344 | 55 |
 | `PyHydroEXA/src/pyhydroexa/audit/report.py` | 339 | 78 |
 | `tests/dambreak/plot_output.py` | 299 | 22 |
 | `PyHydroEXA/src/pyhydroexa/preprocessing/fields.py` | 263 | 94 |
@@ -42,7 +42,7 @@ Heaviest files (top 10):
 
 | Measure | Value | Reading |
 | --- | ---: | --- |
-| Files in graph | 106 | counted sources |
+| Files in graph | 102 | counted sources |
 | Internal edges | 92 | include/import lines resolved inside the tree |
 | Cycles | 0 | must be zero |
 | Condensation depth | 6 | layers a change can ripple through |
