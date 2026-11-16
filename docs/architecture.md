@@ -2,7 +2,7 @@
 
 # Code architecture audit
 
-Measured at `a44109f` on 2026-11-16 01:18 UTC from `HydroEXA`.
+Measured at `b0dc335` on 2026-11-16 01:28 UTC from `HydroEXA`.
 
 Counts are comment-aware SLOC: docstrings and comments are counted separately, blank lines are excluded. Generated and vendored trees (`tpl/`, `build*/`, `docs/_build/`, plotfiles) are skipped.
 
@@ -10,10 +10,10 @@ Counts are comment-aware SLOC: docstrings and comments are counted separately, b
 
 | Language | Files | SLOC | Comment lines | Comments / SLOC |
 | --- | ---: | ---: | ---: | ---: |
-| c | 36 | 3,880 | 953 | 0.25 |
+| c | 36 | 3,880 | 1,468 | 0.38 |
 | python | 61 | 7,874 | 2,711 | 0.34 |
 | shell | 5 | 229 | 131 | 0.57 |
-| **all** | **102** | **11,983** | **3,795** | 0.32 |
+| **all** | **102** | **11,983** | **4,310** | 0.36 |
 
 ## Code mass distribution
 
