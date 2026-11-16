@@ -1,92 +1,105 @@
 #!/bin/bash
-
 # ============================================================
-# Colors
+# build_HydroEXA.sh — Main build orchestrator
+# ============================================================
+# Usage: bash scripts/build_HydroEXA.sh machine.{cpu,gpu} [Release|Debug] [DOUBLE|SINGLE]
+#
+# Pipeline: HDF5 → AMReX → HydroEXA
 # ============================================================
 
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-BOLD='\033[1m'
-NC='\033[0m'
+set -e
+set -o pipefail
 
-WIDTH=60
-BORDER=$(printf '#%.0s' $(seq 1 $WIDTH))
+# --- Load shared library ---
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+source "${SCRIPT_DIR}/lib.sh"
 
-print_banner() {
-    local color=$1
-    local msg="$2"
-
-    local padding=$(( (WIDTH - 2 - ${#msg}) / 2 ))
-    local extra=$(( (WIDTH - 2 - ${#msg}) % 2 ))
-
-    printf "\n${color}${BOLD}%s\n" "$BORDER"
-    printf "#%*s%s%*s#\n" \
-        $padding "" \
-        "$msg" \
-        $((padding + extra)) ""
-    printf "%s${NC}\n\n" "$BORDER"
-}
-
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 [frontier.gpu|frontier.cpu|juwelsbooster.gpu|juwelsbooster.cpu|local.gpu|local.cpu]"
+# --- Parse arguments ---
+if [ $# -ne 3 ]; then
+    echo "Usage: $0 machine.{cpu,gpu} [Release|Debug|...] [DOUBLE|SINGLE]}"
     exit 1
 fi
 
 TARGET=$1
+BUILD_TYPE=$2
+PRECISION=$3
 
-# ============================================================
-# Directories
-# ============================================================
+case "${PRECISION}" in
+    SINGLE|DOUBLE) ;;
+    *)
+        echo "Error: precision must be SINGLE or DOUBLE (got '${PRECISION}')"
+        exit 1
+        ;;
+esac
+export PRECISION
 
-export HYDROEXA_DIR=$(git rev-parse --show-toplevel)
-export AMREX_DIR="${HYDROEXA_DIR}/tpl/amrex"
+# --- Resolve paths (namespaced by machine target) ---
+resolve_paths "${TARGET}"
 
-build_dir="${HYDROEXA_DIR}/build"
-install_dir="${HYDROEXA_DIR}/install"
-
-# ============================================================
-# Machine-specific configuration
-# ============================================================
-
-source ${HYDROEXA_DIR}/machines/${TARGET}
-
-bash ${HYDROEXA_DIR}/scripts/build_AMReX.sh ${TARGET}
-
-if [ -f "${install_dir}" ]; then
-    print_banner "${GREEN}" "HydroEXA already installed for ${TARGET}"
-    exit 0
+# --- Source machine-specific module loads ---
+MACHINE_FILE="${HYDROEXA_DIR}/machines/${TARGET}"
+if [ -f "${MACHINE_FILE}" ]; then
+    print_banner "${BLUE}" "Sourcing machine config: ${MACHINE_FILE}"
+    source "${MACHINE_FILE}"
+else
+    print_banner "${RED}" "No machine config found at ${MACHINE_FILE}"
 fi
 
-print_banner "${BLUE}" "Building HydroEXA for ${TARGET}"
+# --- Export install paths (inherited by all child scripts) ---
+# Everything for one machine lives under install_${TARGET}/:
+#   install_${TARGET}/hdf5                 — parallel HDF5 (precision-agnostic)
+#   install_${TARGET}/amrex_${PRECISION}   — AMReX (amrex::Real is build-specific)
+#   install_${TARGET}/hydroexa_${PRECISION} — HydroEXA binary, lib, headers
+# Build trees mirror this under build_${TARGET}/.
+#
+# HDF5 has no single/double build variant, so it is shared per machine.
+# AMReX and HydroEXA encode amrex::Real at compile time, so they must be
+# keyed by precision to allow SINGLE and DOUBLE builds to coexist.
+export HDF5_INSTALL="${INSTALL_ROOT}/hdf5"
+export HDF5_BUILD="${BUILD_ROOT}/hdf5"
+export HDF5_ROOT="${HDF5_INSTALL}"
+export HDF5_HOME="${HDF5_ROOT}"
 
-# ============================================================
-# Configure
-# ============================================================
+export AMREX_INSTALL="${INSTALL_ROOT}/amrex_${PRECISION}"
+export AMREX_BUILD="${BUILD_ROOT}/amrex_${PRECISION}"
+export AMREX_ROOT="${AMREX_INSTALL}/lib/cmake/AMReX"
 
+export HYDROEXA_SRC=${HYDROEXA_DIR}
+export HYDROEXA_BUILD=${BUILD_ROOT}/hydroexa_${PRECISION}
+export HYDROEXA_INSTALL=${INSTALL_ROOT}/hydroexa_${PRECISION}
+
+
+# --- Step 1: HDF5 ---
+print_banner "${BLUE}" "Step 1/3: Building HDF5"
+source "${HYDROEXA_DIR}/scripts/build_HDF5.sh"
+
+# --- Step 2: AMReX ---
+print_banner "${BLUE}" "Step 2/3: Building AMReX"
+source "${HYDROEXA_DIR}/scripts/build_AMReX.sh"
+
+# --- Step 3: HydroEXA --
+
+print_banner "${BLUE}" "Step 3/3: Building HydroEXA for ${TARGET}"
+
+# --- Configure ---
 print_banner "${BLUE}" "Configuring"
 
-cmake -S ${HYDROEXA_DIR} -B ${build_dir}                                \
-    -DAMReX_ROOT=${AMREX_DIR}/install/lib/cmake/AMReX/AMReXConfig.cmake \
-    -DCMAKE_BUILD_TYPE=Debug                                            \
-    -DCMAKE_INSTALL_PREFIX=${install_dir}                               \
-    -DCMAKE_CXX_FLAGS="-g -O0 -fno-omit-frame-pointer" \
-    -DCMAKE_CXX_COMPILER=${CXX}                
+rm -f "${HYDROEXA_BUILD}/CMakeCache.txt"
 
-# ============================================================
-# Build
-# ============================================================
+cmake -S "${HYDROEXA_SRC}" -B "${HYDROEXA_BUILD}"                         \
+    -DHYDROEXA_GPU_BACKEND="${TARGET}"                                    \
+    -DHDF5_ROOT="${HDF5_ROOT}"                                            \
+    -DAMReX_ROOT="${AMREX_ROOT}"                                          \
+    -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"                                    \
+    -DCMAKE_INSTALL_PREFIX="${HYDROEXA_INSTALL}"                          \
+    -DCMAKE_CXX_COMPILER="${CXX}"                                         \
+    ${GPU_FLAGS}
 
+# --- Build & Install ---
 print_banner "${BLUE}" "Building"
-
-cmake --build ${build_dir} -j 16
-
-# ============================================================
-# Install
-# ============================================================
+cmake --build "${HYDROEXA_BUILD}" -j 16
 
 print_banner "${BLUE}" "Installing"
-
-cmake --install ${build_dir}
+cmake --install "${HYDROEXA_BUILD}"
 
 print_banner "${GREEN}" "HydroEXA build completed"

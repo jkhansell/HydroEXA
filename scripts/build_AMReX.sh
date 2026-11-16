@@ -1,188 +1,65 @@
 #!/bin/bash
-
 # ============================================================
-# Colors
+# build_AMReX.sh — Build AMReX from source
 # ============================================================
-
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-BOLD='\033[1m'
-NC='\033[0m'
-
-WIDTH=60
-BORDER=$(printf '#%.0s' $(seq 1 $WIDTH))
-
-print_banner() {
-    local color=$1
-    local msg="$2"
-
-    local padding=$(( (WIDTH - 2 - ${#msg}) / 2 ))
-    local extra=$(( (WIDTH - 2 - ${#msg}) % 2 ))
-
-    printf "\n${color}${BOLD}%s\n" "$BORDER"
-    printf "#%*s%s%*s#\n" \
-        $padding "" \
-        "$msg" \
-        $((padding + extra)) ""
-    printf "%s${NC}\n\n" "$BORDER"
-}
-
-# ============================================================
-# Input
+# Sourced by build_HydroEXA.sh. Requires lib.sh to be loaded first.
 # ============================================================
 
-if [ $# -ne 1 ]; then
-    print_banner "${RED}" "Invalid target"
-    echo "Usage:"
-    echo "  $0 [frontier.gpu|frontier.cpu|juwelsbooster.gpu|juwelsbooster.cpu|local.gpu|local.cpu]"
+# --- Guard: must be sourced, not executed ---
+if [[ "${LIB_LOADED:-}" != "1" ]]; then
+    echo "Error: build_AMReX.sh must be sourced via build_HydroEXA.sh" >&2
     exit 1
 fi
 
-TARGET=$1
-
-# ============================================================
-# Directories
-# ============================================================
-
-export HYDROEXA_DIR=$(git rev-parse --show-toplevel)
-export AMREX_DIR="${HYDROEXA_DIR}/tpl/amrex"
-
-build_dir="${AMREX_DIR}/build/"
-install_dir="${AMREX_DIR}/install/"
-
+# Machine-specific build/install trees are exported by build_HydroEXA.sh.
+# Keep AMReX out of the submodule source tree (tpl/amrex).
+build_dir="${AMREX_BUILD:-${BUILD_ROOT}/amrex_${PRECISION:-DOUBLE}}"
+install_dir="${AMREX_INSTALL:-${INSTALL_ROOT}/amrex_${PRECISION:-DOUBLE}}"
 amrex_config="${install_dir}/lib/cmake/AMReX/AMReXConfig.cmake"
 
-# ============================================================
-# Machine-specific configuration
-# ============================================================
-
-
-case ${TARGET} in
-
-    frontier.gpu)
-
-        export CC=cc
-        export CXX=CC
-        export FC=ftn
-
-        GPU_FLAGS="
-            -DCMAKE_HIP_COMPILER=hipcc
-            -DCMAKE_HIP_ARCHITECTURES=gfx90a
-            -DAMReX_GPU_BACKEND=HIP
-            -DAMReX_AMD_ARCH=gfx90a
-            -DAMReX_GPU_RDC=ON
-        "
-        ;;
-
-    frontier.cpu)
-
-        export CC=cc
-        export CXX=CC
-        export FC=ftn
-
-        GPU_FLAGS="
-            -DAMReX_GPU_BACKEND=NONE
-        "
-        ;;
-
-    juwelsbooster.gpu)
-
-        export CC=mpicc
-        export CXX=mpicxx
-        export FC=mpif90
-
-        GPU_FLAGS="
-            -DCMAKE_CUDA_ARCHITECTURES=80
-            -DAMReX_GPU_BACKEND=CUDA
-            -DAMReX_CUDA_ARCH=8.0
-            -DAMReX_GPU_RDC=ON
-        "
-        ;;
-
-    juwelsbooster.cpu)
-
-        export CC=mpicc
-        export CXX=mpicxx
-        export FC=mpif90
-
-        GPU_FLAGS="
-            -DAMReX_GPU_BACKEND=NONE
-        "
-        ;;
-
-    local.gpu)
-
-        export CC=gcc
-        export CXX=g++
-        export FC=gfortran
-
-        GPU_FLAGS="
-            -DCMAKE_CUDA_ARCHITECTURES=native
-            -DAMReX_GPU_BACKEND=CUDA
-        "
-        ;;
-
-    local.cpu)
-
-
-
-        GPU_FLAGS="
-            -DAMReX_GPU_BACKEND=NONE
-        "
-        ;;
-
-    *)
-
-        print_banner "${RED}" "Unknown target: ${TARGET}"
-        exit 1
-        ;;
-
-esac
-
-# ============================================================
-# Skip rebuild if already installed
-# ============================================================
-
+# ---------------------------------------------------------------------------
+# Skip if already installed for this machine
+# ---------------------------------------------------------------------------
 if [ -f "${amrex_config}" ]; then
-    print_banner "${GREEN}" "AMReX already installed for ${TARGET}"
-    exit 0
+    print_banner "${GREEN}" "AMReX already installed at ${install_dir}"
+    export AMREX_ROOT="${install_dir}/lib/cmake/AMReX"
+    return 0 2>/dev/null
 fi
 
 print_banner "${BLUE}" "Building AMReX for ${TARGET}"
 
-# ============================================================
-# Configure
-# ============================================================
-
+# --- Configure ---
 print_banner "${BLUE}" "Configuring"
+
+# Only enable MPI if an MPI wrapper (mpicc) is available on PATH.
+if command -v mpicc &>/dev/null; then
+    print_banner "${BLUE}" "MPI wrapper found — enabling AMReX_MPI"
+else
+    print_banner "${RED}" "No MPI wrapper — building AMReX without MPI (local/dev mode)"
+fi
 
 cmake -S ${AMREX_DIR} -B ${build_dir}          \
     -DAMReX_MPI=ON                             \
-    -DAMReX_OMP=OFF                            \
+    -DAMReX_OMP=ON                             \
     -DAMReX_PARTICLES=ON                       \
     -DAMReX_SPACEDIM=2                         \
     -DAMReX_LINEAR_SOLVERS=ON                  \
-    -DAMReX_PRECISION=DOUBLE                   \
-    -DCMAKE_BUILD_TYPE=Debug                 \
+    -DAMReX_PRECISION=${PRECISION}             \
+    -DAMReX_HDF5=ON                            \
+    -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"         \
     -DCMAKE_INSTALL_PREFIX=${install_dir}      \
     -DCMAKE_CXX_COMPILER=${CXX}                \
+    -DHDF5_ROOT=${HDF5_ROOT}                   \
     ${GPU_FLAGS}
 
-# ============================================================
-# Build
-# ============================================================
-
+# --- Build ---
 print_banner "${BLUE}" "Building"
-
 cmake --build ${build_dir} -j 16
 
-# ============================================================
-# Install
-# ============================================================
-
+# --- Install ---
 print_banner "${BLUE}" "Installing"
-
 cmake --install ${build_dir}
+
+export AMREX_ROOT="${install_dir}/lib/cmake/AMReX"
 
 print_banner "${GREEN}" "AMReX build completed"

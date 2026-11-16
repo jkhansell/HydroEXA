@@ -1,0 +1,21 @@
+[project]
+name = "hydroexa-dev"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pyhydroexa",
+]
+
+[tool.uv.sources]
+pyhydroexa = { workspace = true }
+
+[tool.uv.workspace]
+members = ["PyHydroEXA"]
+
+[dependency-groups]
+docs = [
+    "sphinx>=8.1",
+    "myst-parser>=4.0",
+    "furo>=2024.8.6",
+    "breathe>=4.35",
+]

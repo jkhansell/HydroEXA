@@ -1,0 +1,95 @@
+# --------------------------------------------------------------------------
+# HydroEXA C++ API -- Doxygen configuration
+#
+# Deliberately directory-based: INPUT names a directory, and Breathe consumes
+# the XML tree from docs/api/cpp.rst via a single \c doxygenindex directive.
+# Splitting, merging or moving solver files therefore needs no change here or
+# in the Sphinx tree.
+#
+# Scaffolding mode: EXTRACT_ALL=YES renders the real structure of the solver
+# whether or not a member is documented.  The gate that would end scaffolding
+# is EXTRACT_ALL=NO; until then, WARN_IF_UNDOCUMENTED=YES + WARN_AS_ERROR=YES
+# already make an undocumented entity a build failure.
+#
+# Requires a C++17-capable doxygen (the prebuilt 1.18 linux binary needs
+# libstdc++ from gcc >= 12; on Kabre, "module load gcc/13.4.0" first).
+# --------------------------------------------------------------------------
+
+PROJECT_NAME           = "HydroEXA"
+PROJECT_BRIEF          = "GPU-accelerated AMR shallow-water solver on AmReX"
+OUTPUT_DIRECTORY       = .
+CREATE_SUBDIRS         = NO
+ALLOW_UNICODE_NAMES    = YES
+
+# --- Input: directories, never file lists --------------------------------
+# Public headers only.  src/*.cpp is deliberately excluded: its AMReX device
+# lambdas (ParallelFor closures) produce declarations that Sphinx's C++ domain
+# cannot parse, which turns the index into a wall of parser warnings.  The
+# implementation is covered by the prose in docs/PIPELINE.md; add source files
+# here only if/when they carry doc-comments worth indexing.
+INPUT                  = ../../include
+FILE_PATTERNS          = *.H *.h *.hpp *.cpp
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */__pycache__/* \
+                         */build_*/* \
+                         */install_*/*
+EXCLUDE_SYMLINKS       = YES
+
+# --- Extraction ----------------------------------------------------------
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_PACKAGE        = NO
+EXTRACT_STATIC         = NO
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+# --- Language / preprocessing -------------------------------------------
+OPTIMIZE_OUTPUT_FOR_C  = NO
+TYPEDEF_HIDES_STRUCT   = NO
+MARKDOWN_SUPPORT       = YES
+JAVADOC_AUTOBRIEF      = YES
+TAB_SIZE                = 4
+ENABLE_PREPROCESSING   = YES
+SEARCH_INCLUDES        = NO
+INCLUDE_PATH           =
+# Only the macros named in PREDEFINED are expanded; everything else is left
+# alone.  This is what makes the device kernels look like ordinary functions.
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+# AMReX's host/device decorations are meaningless to a C++ parser and actively
+# harmful to Breathe's: libclang reads "AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+# void f(...)" as a declaration without a parameter list, so every device
+# signature becomes a parse warning in the Sphinx build.  Erasing them here is
+# what lets those declarations be indexed; AMREX_SPACEDIM is defined so the
+# dimension guards resolve the same way the compiler resolves them.
+PREDEFINED             = AMREX_GPU_DEVICE= \
+                         AMREX_GPU_HOST= \
+                         AMREX_GPU_HOST_DEVICE= \
+                         AMREX_GPU_MANAGED= \
+                         AMREX_GPU_CONSTANT= \
+                         AMREX_FORCE_INLINE= \
+                         AMREX_SPACEDIM=2
+CLANG_ASSISTED_PARSING = NO
+
+# --- Warnings (gate) ----------------------------------------------------
+# Every file, type and member in include/ carries a doc comment, so an
+# undocumented entity is now a regression rather than a backlog item.
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_IF_INCOMPLETE_DOC = NO
+WARN_AS_ERROR          = YES
+
+# --- Output: XML for Breathe only ---------------------------------------
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+GENERATE_RTF           = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+XML_PROGRAMLISTING     = NO
+GENERATE_TREEVIEW      = NO
+HAVE_DOT               = NO

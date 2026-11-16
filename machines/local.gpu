@@ -1,0 +1,6 @@
+#!/bin/bash
+
+GPU_FLAGS="
+    -DCMAKE_CUDA_ARCHITECTURES=native
+    -DAMReX_GPU_BACKEND=CUDA
+"

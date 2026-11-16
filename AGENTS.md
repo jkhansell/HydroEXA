@@ -1,0 +1,306 @@
+# HydroEXA — Solver Codebase
+
+Guidance for AI coding agents working in this repository. Local path in WSL:
+`~/Documents/HydroEXA/HydroEXACode` (sshfs mount of `kabre:/data/jovillalobos/CFD/HydroEXA`).
+
+## Project Overview
+
+HydroEXA is a GPU-accelerated, performance-portable AMR solver for shallow water flow
+coupled to sediment transport (Exner equation), built on
+[AMReX](https://amrex-codes.github.io/).
+
+- 2D spatial discretization (`AMReX_SPACEDIM=2`), MPI parallel with optional CUDA/HIP GPU offload.
+- Conserved variables: water depth `h`, x-momentum `hu`, y-momentum `hv`.
+- Terrain: bathymetry `z` plus mask `n` (1 = fluid, -9999.0 = NODATA).
+- Two Riemann solvers are selectable at runtime: `Roe` (classic) and `HydrostaticRoe`
+  (well-balanced / lake-at-rest preserving).
+- Active development branch: `AmrCore_refactor`.
+
+## Build System
+
+CMake build driven by a three-stage shell pipeline, orchestrated by one entry point:
+
+```bash
+bash scripts/build_HydroEXA.sh <machine.cpu|machine.gpu> <build_type> <precision>
+# e.g.
+bash scripts/build_HydroEXA.sh local.gpu Release DOUBLE
+bash scripts/build_HydroEXA.sh kabreL40S.gpu Debug DOUBLE
+```
+
+- **Stages:** HDF5 → AMReX → HydroEXA. The child scripts (`build_HDF5.sh`,
+  `build_AMReX.sh`) take no arguments; the parent exports `HDF5_ROOT`, `AMREX_ROOT`,
+  `HYDROEXA_BUILD`, etc.
+- **Build types:** `Release`, `Debug`, `RelWithDebInfo`.
+- **Precision:** `DOUBLE` or `SINGLE`.
+- **Shared logic:** `scripts/lib.sh` (sourced, never executed) provides `print_banner()`,
+  `set_machine_env()`, `resolve_paths()`, `preflight()`, and execution guards.
+  It replaced the older `print_banner.sh` / `machine_selection.sh` pair.
+- **Output:** all artifacts are namespaced by machine target, because binaries are
+  toolchain- and architecture-specific:
+  - `build_<target>/hydroexa_<PRECISION>/HydroEXA` (build tree)
+  - `install_<target>/hydroexa_<PRECISION>/bin/HydroEXA` (install prefix)
+  - `install_<target>/hdf5` (precision-agnostic, shared per machine)
+  - `install_<target>/amrex_<PRECISION>` (AMReX is precision-specific)
+  - Build trees mirror the install layout under `build_<target>/`.
+- The machine target is the same argument passed to the build script (`kabreL40S.gpu`,
+  `local.gpu`, …), so a shared tree can host several machine builds side by side.
+- AMReX and HydroEXA are keyed by `PRECISION` (`DOUBLE`/`SINGLE`) because `amrex::Real`
+  is fixed at compile time; HDF5 is not, so it is shared. This lets SINGLE and DOUBLE
+  builds coexist and prevents the skip-guards from reusing a mismatched AMReX install.
+
+### What the script does for you (and what it expects from you)
+
+`build_HydroEXA.sh` is a **one-command pipeline**: you do not need to load modules,
+set paths, or invoke cmake yourself. It handles, in order:
+
+1. **Path resolution** — `resolve_paths "<target>"` (from `lib.sh`) namespaces
+   `BUILD_ROOT`/`INSTALL_ROOT` by machine target and precision, then exports
+   `HDF5_ROOT`, `AMREX_ROOT`, `HYDROEXA_SRC/BUILD/INSTALL` for the child stages.
+2. **Machine environment** — it **re-sources `machines/<target>` internally**.
+   The profile owns the full environment: `module purge` + all `module load`s
+   (compiler, MPI, CUDA, HDF5, **cmake**), `CC`/`CXX`/`FC`, and `GPU_FLAGS`.
+   Consequence: **anything you `module load` before running the script is silently
+   wiped** by the profile's `module purge`. Never rely on pre-loaded modules —
+   add the module to the machine profile instead.
+3. **Stage guards** — the third-party stages are skipped when their install
+   already exists:
+   - HDF5: skipped if `install_<target>/hdf5/` is populated
+   - AMReX: skipped if `install_<target>/amrex_<PRECISION>/` is populated
+   - HydroEXA: **never skipped** — the stage always reconfigures, rebuilds and
+     installs, so `bash scripts/build_HydroEXA.sh …` is safe to re-run after an
+     edit (object files are reused; only the CMake cache is deleted).
+
+### Rebuilding after an edit
+
+The guards check *installs*, not source freshness, but the HydroEXA stage has no
+guard: re-running the script always brings the binary up to date.
+
+```bash
+# Edit-compile loop, no reconfigure (fastest; needs the machine env in scope):
+source machines/<target>
+cmake --build  build_<target>/hydroexa_<PRECISION> -j 16
+cmake --install build_<target>/hydroexa_<PRECISION>
+
+# Full pipeline (reconfigures from scratch): HDF5/AMReX skipped, HydroEXA rebuilt
+bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
+
+# Toolchain/third-party changed (AMReX, HDF5, machine profile):
+rm -rf install_<target>/amrex_<PRECISION>   # or install_<target>/hdf5, or both
+bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
+```
+
+Never `rm -rf` a HydroEXA build/install tree for an ordinary source edit — the
+incremental path above is a few seconds, a clean configure is minutes.
+
+The script's copy of the build re-runs configure from scratch each time (it deletes
+`CMakeCache.txt` in the HydroEXA stage), so there is no incremental-cache staleness
+to worry about; the direct `cmake --build` path keeps the cache and is therefore
+the faster loop once the tree is configured.
+
+### CMake version coupling (Kabré gotcha)
+
+The installed `AMReXConfig.cmake` embeds
+`cmake_minimum_required(VERSION <the cmake that built AMReX>)`, so the HydroEXA
+stage's `find_package(AMReX)` fails if the running cmake is *older* than the one
+that built the AMReX install — even though the AMReX sources themselves only
+declare 3.18. Therefore: **the machine profile must load a cmake at least as new
+as the one that built `install_<target>/amrex_<PRECISION>`**; profiles already do
+this (`module load cmake/...`). If AMReX is ever rebuilt with a newer cmake,
+rebuild nothing else but be aware old install configs will now demand it.
+
+**Open issue (as of 2026-11):** on Kabré (AlmaLinux 9.x), the `cmake/4.x` modules
+under `/opt/tools` fail with `libssl.so.10: cannot open shared object file` —
+those binaries were built against CentOS 7 OpenSSL libs, absent from the current
+image (both on the login node and GPU nodes). The AMReX install currently pinned
+was built with cmake 3.31.8. Until a working cmake ≥ 3.31.8 is available (e.g. a
+user-space cmake via `uv pip install cmake` wired into the machine profiles in
+place of the broken module), fresh AMReX/HydroEXA configure on Kabré is blocked.
+
+### Manual CMake configure (after AMReX is built)
+
+```bash
+cmake -S . -B build_<target>/hydroexa_<PRECISION> \
+    -DHDF5_ROOT=<repo>/install_<target>/hdf5 \
+    -DAMReX_ROOT=<repo>/install_<target>/amrex_<PRECISION>/lib/cmake/AMReX \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_COMPILER=mpicxx \
+    -DCMAKE_INSTALL_PREFIX=<repo>/install_<target>/hydroexa_<PRECISION>
+cmake --build build_<target>/hydroexa_<PRECISION> -j 16
+cmake --install build_<target>/hydroexa_<PRECISION>
+```
+
+### Local development notes (RTX 4070 / Ubuntu 24.04)
+
+- Run builds inside the conda env: `mamba run -n hydroexa_env bash scripts/build_HydroEXA.sh ...`
+  so `mpicc`/`mpicxx` and the conda HDF5 CMake config are found consistently.
+- `local.cpu` / `local.gpu` use `mpicc`/`mpicxx` deliberately, to match the MPI variant
+  that conda HDF5 links against (avoids `ompi_mpi_errors_throw_exceptions` symbol errors).
+- Do **NOT** set `LANGUAGE CUDA` on HydroEXA C++ sources: nvcc's C++ parser rejects C++20
+  features used by AMReX headers (`std::numbers::pi_v`, `std::ssize`). Sources compile with
+  `mpicxx`; AMReX compiles its own CUDA.
+- `Debug` builds are recommended for development (usable backtraces); `Release` for production.
+
+## Machine Targets
+
+| Profile | Platform | Toolchain / GPU |
+|---------|----------|-----------------|
+| `local.cpu` | WSL2 Ubuntu, RTX 4070 host | gcc via `mpicxx`, CPU only |
+| `local.gpu` | WSL2 Ubuntu, RTX 4070 | CUDA `native` arch |
+| `kabreL40S.gpu` | KISTI Kabré | CUDA 12.4, gcc 13.4, MPICH 4.1.1 |
+| `kabreV100.gpu` | KISTI Kabré | CUDA 12.4, arch 7.0 (Volta) |
+| `kabreKURA.cpu` | KISTI Kabré | gcc 11.1, MPICH 4.1.1, parallel HDF5 |
+| `frontier.gpu` | OLCF Frontier | Cray PrgEnv, ROCm 7.0, `gfx90a` (MI250X) |
+| `frontier.cpu` | OLCF Frontier | Cray PrgEnv, no GPU arch |
+
+Each profile is a shell file sourcing its own `module load` set and exporting `GPU_FLAGS`,
+`CC`/`CXX`/`FC`, and `HDF5_ROOT` where needed.
+
+## Repository Layout
+
+```
+HydroEXACode/
+├── src/
+│   ├── HydroEXADriver.cpp        # main(): amrex::Initialize → HydroEXA → Compute → Finalize
+│   ├── HydroEXA.cpp              # ReadParameteres, Initialize, Compute (subcycled time loop), Finalize
+│   ├── io/
+│   │   ├── IOHandler.cpp         # input parsing + plotfile/checkpoint orchestration
+│   │   ├── Checkpointer.cpp      # HDF5 and native checkpoint read/write
+│   │   ├── HDF5PlotFile.cpp      # multi-level MultiFab → HDF5 plotfile
+│   │   └── NativePlotFile.cpp    # multi-level MultiFab → AMReX native plotfile
+│   ├── solvers/
+│   │   ├── Roe.cpp               # classic Roe fluxes, dt, tagging
+│   │   └── HydrostaticRoe.cpp    # hydrostatic-reconstruction (well-balanced) Roe
+│   ├── state/
+│   │   ├── AmrMeshState_Init.cpp     # ctor, Initialize(), terrain + solver setup
+│   │   ├── AmrMeshState_AMR.cpp      # AmrCore overrides, ErrorEst, PostProcessBaseGrids
+│   │   ├── AmrMeshState_Physics.cpp  # ComputeDt, TimeStepWithSubcycling, AdvanceLevel
+│   │   └── AmrMeshState_Utils.cpp    # ResizeLevels, plotfile/checkpoint writers, diagnostics
+│   └── utils/MaskedAverageDown.cpp   # NODATA-aware terrain averaging
+├── include/
+│   ├── HydroEXA.H
+│   ├── boundaries/BCFill.H       # physical BC type → BCRec mapping, HydroEXAFill functor
+│   ├── io/                       # Checkpointer.H, CheckpointerContext.H, HDF5_File.H (HDF5Reader),
+│   │                             # HDF5PlotFile.H, NativePlotFile.H, IOHandler.H
+│   ├── solvers/
+│   │   ├── BaseSolver.H          # CRTP interface: compute_fluxes, compute_dt, tag_cells
+│   │   ├── SolverVariant.H       # std::variant<monostate, Roe, HydrostaticRoe> dispatch
+│   │   ├── SolverContext.H       # MultiFabs, BCs, flux registers passed to solvers
+│   │   ├── Roe.H, HydrostaticRoe.H
+│   │   ├── RoeExnerACM.H, RoeExnerFCM.H   # header-only, see Known Gaps
+│   │   └── kernels/              # device-side: Roe.H, HydrostaticRoe.H
+│   ├── state/AmrMeshState.H      # AmrCore subclass owning state, terrain, solver, BCs
+│   └── utils/                    # Params.H, Constants.H, Logging.H,
+│                                 # MaskedAverageDown.H, FillPatchUtils.H
+├── machines/                     # one shell profile per target (7)
+├── scripts/                      # build_HydroEXA.sh, build_AMReX.sh, build_HDF5.sh, lib.sh, visualize.py
+├── tests/                        # dambreak (E2E battery), dambreakNoAMR (legacy),
+│                                 # dambreakcircle, LakeAtRestRoe,
+│                                 # LakeAtRestHydrostaticRoe, LakeAtRestAugmentedRoe (stale)
+├── PyHydroEXA/                   # Python companion package (uv workspace member)
+├── docs/PIPELINE.md              # full simulation pipeline reference
+├── plans/                        # design notes (HydrostaticRoe, pyhydroexa plans)
+├── tpl/                          # amrex + hdf5 third-party sources/installs
+├── CMakeLists.txt, pyproject.toml, uv.lock
+└── CHANGELOG.md, README.md, LICENSE
+```
+
+## Key Design Patterns
+
+- **CRTP solver interface** — `BaseSolver<Derived>`; concrete solvers implement
+  `compute_fluxes_Impl`, `compute_dt_Impl`, `compute_dt_level`, `tag_cells_Impl`.
+- **Variant dispatch** — `SolverVariant` wraps `std::variant<std::monostate, Roe, HydrostaticRoe>`;
+  the solver is chosen from input parameters, then `std::visit` routes every call.
+- **Two-phase initialization** — constructor parses inputs (`ReadParameters`), `Initialize()`
+  builds mesh state and the solver variant (avoids virtual calls in constructors).
+- **AmrMeshState** — declares the full AMR state as an `amrex::AmrCore` subclass; owns
+  `U_old`/`U_new`, `StaticTerrain` (ground truth), `DynamicTerrain`, flux registers, BCRecs,
+  and the solver variant. Implementation split across four `.cpp` files by concern.
+- **GPU kernels** — host-side solver code stays in `.cpp`; device code lives in
+  `include/solvers/kernels/*.H` as `AMREX_GPU_DEVICE` lambdas driven by `amrex::ParallelFor`
+  / `ReduceOps`, portable across CUDA and HIP.
+- **StaticTerrain** — one high-resolution `MultiFab` loaded from HDF5 at startup acts as the
+  terrain database; it is mapped to each AMR level with `masked_average_down` (fine→coarse)
+  or `cell_cons_interp` (coarse→fine), so NODATA never bleeds into valid cells.
+- **Mesh pruning** — `PostProcessBaseGrids` drops Level-0 blocks that are 100% NODATA.
+- **Structured logging** — `Logging.H` `Logger` singleton, `LogLevel`
+  (INFO=0, DIAG=1, DEBUG=2, EXPL=3, WARN=4, ERROR=5), set via `HydroEXA.log_verbosity`,
+  IO-processor gated.
+- **I/O split** — `IOHandler` orchestrates; plotfiles and checkpoints each have HDF5 and
+  native backends; `HDF5Reader` parses input terrain/bathymetry.
+
+## Running
+
+```bash
+mpirun -np <N> ../../build_<target>/hydroexa_<PRECISION>/HydroEXA inputs   # run from a test dir
+```
+
+Run from the test directory (input paths are relative). Test cases:
+
+| Directory | Purpose |
+|-----------|---------|
+| `tests/dambreak/` | **E2E dam-break battery (SWASHES benchmark)**: shared `RectangularDambreak.h5` + analysis scripts at the parent; `solvers/{roe,hydrostatic_roe}/` hold input variants (`amr`, `amr_noreflux`, `amr_nosubcycle`, `amr_fastregrid`, `amr_buf`, `single_level`, `single_level_fine`) + per-solver test docs; all artifacts in `outputs/<solver>/`. Runner: `bash run.sh <solver> <variant> <exe> [np] [tag]` (`HYDROEXA_SKIP_PLOTS=1` = solve only, for bisects). Intended for CI/CD. Accuracy is scored as length-weighted L1/L2/Linf against the exact solution and against both uniform yardsticks (`single_level_fine` = level-1 dx = stable, `single_level` = level-0 dx = base); `metrics_table.py` emits the CSV scoreboard. The `regrid_int=5` variant reaches parity with the uniform fine run, which pins the AMR accuracy deficit on regrid cadence rather than the flux or the coupling. |
+| `tests/dambreakNoAMR` | legacy dam break on a **different domain** (51.2×1.6) — not a control for `tests/dambreak/`; the fixed-grid reference there is `solvers/roe/inputs_single_level` |
+| `tests/dambreakcircle` | circular dam break, includes DEM/TIFF → HDF5 tooling |
+| `tests/LakeAtRestAugmentedRoe` | stale dir — its `inputs` is a dam-break config (`model="Roe"`); pending rename/removal |
+| `tests/LakeAtRestHydrostaticRoe` | lake-at-rest preservation, hydrostatic Roe |
+
+Generate test input: `uv run python tests/make_test_h5.py` (per test directory).
+Analysis/plot scripts sit beside each `inputs` file (`plot_output.py`, `analyze.py`,
+`visualize.py`, `audit.py`, `analytical.py`).
+
+## Python Companion Package (`PyHydroEXA`)
+
+The root `pyproject.toml` is a **uv workspace** whose only member is `PyHydroEXA`
+(distribution name `pyhydroexa`). Install everything with `uv sync` from the repo root.
+
+- Preprocessing: raster/DEM → HydroEXA HDF5 (`preprocessing/`)
+- io: plotfile readers, field extraction, AMR block geometry (`io/`)
+- analysis: reusable reductions, e.g. line profiles (`analysis/`)
+- plotting: field maps, AMR overlays, animations (`plotting/`)
+- audit: SLOC entropy + include/import coupling of the source tree (`audit/`)
+- CLI entry points: `pyhydroexa`, `pyhydroexa-inspect`, `pyhydroexa-plot`, `pyhydroexa-animate`
+- Dependencies: numpy, scipy, h5py, matplotlib, imageio, yt, geopandas, shapely, rasterio,
+  pyogrio, fiona, polars (plus optional `gdal` wheels on Linux)
+- Tests: `pytest` (config in `PyHydroEXA/pyproject.toml`); sample outputs in `validation_output/`
+
+## Key Files for Common Tasks
+
+| Task | Files |
+|------|-------|
+| Add a solver | `include/solvers/BaseSolver.H`, `SolverVariant.H`, `src/solvers/*.cpp`, `kernels/` |
+| Change time stepping | `src/HydroEXA.cpp` (`Compute`), `src/state/AmrMeshState_Physics.cpp` |
+| Change AMR / tagging | `src/state/AmrMeshState_AMR.cpp`, solver `tag_cells` |
+| Change I/O formats | `src/io/*.cpp`, `include/io/` |
+| Boundary conditions | `include/boundaries/BCFill.H` |
+| Physics constants / tolerances | `include/utils/Constants.H` |
+| Input parameters | `include/utils/Params.H`, `src/io/IOHandler.cpp` |
+| Terrain / NODATA handling | `src/state/AmrMeshState_Init.cpp`, `src/utils/MaskedAverageDown.cpp` |
+| AMR level state | `include/state/AmrMeshState.H`, `src/state/AmrMeshState_*.cpp` |
+| Machine profiles | `machines/`, `scripts/lib.sh` |
+
+## Known Gaps & Gotchas
+
+- **Exner solvers are not wired in.** `include/solvers/RoeExnerACM.H` and
+  `RoeExnerFCM.H` are declared but absent from `SolverVariant` and have no `.cpp`;
+  sediment/morphodynamic coupling is still in progress.
+- **`kernels/AlternateRoe.H`** was removed (2026-11-13): it was orphaned —
+  no references anywhere in `src/` or `include/`, and not in `SolverVariant`.
+
+- **Artifacts in tree** (do not treat as source): `build_*/`, `install_*/`, `.venv/`,
+  `logs/`, `tests/*/plotfiles/`, `tests/*/outputs/`, `Backtrace.*`, `err.log`.
+  Third-party *sources* stay in `tpl/`; their builds/installs live under the
+  machine-namespaced directories.
+- This checkout is a **git submodule parent** (`tpl/amrex`); after `git pull` verify
+  `git submodule update --init --recursive`.
+- The tree lives on an **sshfs mount**: metadata is slow and inconsistent (odd UIDs,
+  unreliable `stat`), so avoid recursive `grep`/`find` over the whole repo and prefer
+  explicit paths.
+
+## Dependencies
+
+- **AMReX** (`tpl/amrex`, git submodule) — AMR framework, CUDA/HIP backends
+- **HDF5** (parallel build, `tpl/hdf5`) — terrain I/O, plotfiles, checkpoints
+- **MPI** — MPICH 4.1.1 on Kabré, Cray MPICH on Frontier
+- **CUDA 12.4** or **ROCm 7.0** — GPU acceleration
+- **CMake ≥ 3.20**
+- **Python ≥ 3.12** with `uv`

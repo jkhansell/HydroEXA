@@ -1,451 +1,317 @@
-
-#include <hydroexa/HydroEXA.H>
-#include <hydroexa/HydroEXA_prob_parm.H>
-
-#include <AMReX_Gpu.H>
-#include <AMReX_MultiFabUtil.H>
 #include <AMReX_ParmParse.H>
+#include <HydroEXA.H>
+#include <utils/Logging.H>
 
-#include <climits>
-
-using namespace amrex;
-
-constexpr int HydroEXA::NUM_GROW;
-
-// Enforce problem defaults
-BCRec     HydroEXA::phys_bc;
-int       HydroEXA::verbose = 0;
-IntVect   HydroEXA::hydro_tile_size {AMREX_D_DECL(16,16,1)};
-Real      HydroEXA::cfl       = 0.5;
-int       HydroEXA::do_reflux = 1;
-
-int  HydroEXA::refine_max_h_grad_lev    = 5;
-Real HydroEXA::h_grad_threshold         = 1e-2;
-
-int  HydroEXA::refine_max_umag_grad_lev = 5;
-Real HydroEXA::umag_grad_threshold      = 1e-2;
-
-HydroEXA::HydroEXA ()
-{}
-
-HydroEXA::HydroEXA (Amr&            papa,
-          int             lev,
-          const Geometry& level_geom,
-          const BoxArray& bl,
-          const DistributionMapping& dm,
-          Real            time)
-    : AmrLevel(papa,lev,level_geom,bl,dm,time)
-{
-    if (do_reflux && level > 0) {
-        flux_reg.reset(new FluxRegister(grids,dmap,crse_ratio,level,NUM_STATE));
-    }
-
-    buildMetrics();
+HydroEXA::HydroEXA() {
+    ReadParameters();
 }
 
-HydroEXA::~HydroEXA ()
-{}
-
-void
-HydroEXA::init (AmrLevel& old)
-{
-    auto& oldlev = dynamic_cast<HydroEXA&>(old);
-
-    Real dt_new    = parent->dtLevel(level);
-    Real cur_time  = oldlev.state[State_Type].curTime();
-    Real prev_time = oldlev.state[State_Type].prevTime();
-    Real dt_old    = cur_time - prev_time;
-    setTimeLevel(cur_time,dt_old,dt_new);
-
-    MultiFab& S_new = get_new_data(State_Type);
-    FillPatch(old,S_new,0,cur_time,State_Type,0,NUM_STATE);
-
-    MultiFab& T_new = get_new_data(Terrain_Type);
-    FillPatch(old,T_new,0,cur_time,Terrain_Type,0,NUM_TERRAIN);
-}
-
-void
-HydroEXA::init ()
-{
-    Real dt        = parent->dtLevel(level);
-    Real cur_time  = getLevel(level-1).state[State_Type].curTime();
-    Real prev_time = getLevel(level-1).state[State_Type].prevTime();
-    Real dt_old = (cur_time - prev_time)/static_cast<Real>(parent->MaxRefRatio(level-1));
-    setTimeLevel(cur_time,dt_old,dt);
-
-    MultiFab& S_new = get_new_data(State_Type);
-    FillCoarsePatch(S_new, 0, cur_time, State_Type, 0, NUM_STATE);
-
-    MultiFab& T_new = get_new_data(Terrain_Type);
-    FillCoarsePatch(T_new, 0, cur_time, Terrain_Type, 0, NUM_TERRAIN);
-}
-
-void
-HydroEXA::initData ()
-{
-    BL_PROFILE("HydroEXA::initData()");
-
-    const auto geomdata = geom.data();
-    MultiFab& S_new = get_new_data(State_Type);
-    MultiFab& T_new = get_new_data(Terrain_Type);
-
-
-#ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
-    for (MFIter mfi(S_new); mfi.isValid(); ++mfi)
+void HydroEXA::ReadParameters() {
+    // Constructor can be used to set up any necessary data structures or 
+    // read in configuration parameters if needed. For now, we'll keep it simple.
+    BL_PROFILE("HydroEXA::Constructor");
     {
-        const Box& box = mfi.validbox();
-        auto sfab = S_new.array(mfi);
-        auto tfab = T_new.array(mfi);
-
-        amrex::ParallelFor(box,
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-        {
-            initdata(i, j, k, sfab, tfab, geomdata);
-        });
-    }
-}
-
-void
-HydroEXA::computeInitialDt (int                    finest_level,
-                       int                    /*sub_cycle*/,
-                       Vector<int>&           n_cycle,
-                       const Vector<IntVect>& /*ref_ratio*/,
-                       Vector<Real>&          dt_level,
-                       Real                   stop_time)
-{
-    //
-    // Grids have been constructed, compute dt for all levels.
-    //
-    if (level > 0) {
-        return;
-    }
-
-    Real dt_0 = std::numeric_limits<Real>::max();
-    int n_factor = 1;
-    for (int i = 0; i <= finest_level; i++)
-    {
-        dt_level[i] = getLevel(i).initialTimeStep();
-        n_factor   *= n_cycle[i];
-        dt_0 = std::min(dt_0,n_factor*dt_level[i]);
-    }
-
-    //
-    // Limit dt's by the value of stop_time.
-    //
-    const Real eps = 0.001*dt_0;
-    Real cur_time  = state[State_Type].curTime();
-    if (stop_time >= 0.0) {
-        if ((cur_time + dt_0) > (stop_time - eps))
-            dt_0 = stop_time - cur_time;
-    }
-
-    n_factor = 1;
-    for (int i = 0; i <= finest_level; i++)
-    {
-        n_factor *= n_cycle[i];
-        dt_level[i] = dt_0/n_factor;
-    }
-}
-
-void
-HydroEXA::computeNewDt (int                    finest_level,
-                   int                    /*sub_cycle*/,
-                   Vector<int>&           n_cycle,
-                   const Vector<IntVect>& /*ref_ratio*/,
-                   Vector<Real>&          dt_min,
-                   Vector<Real>&          dt_level,
-                   Real                   stop_time,
-                   int                    post_regrid_flag)
-{
-    //
-    // We are at the end of a coarse grid timecycle.
-    // Compute the timesteps for the next iteration.
-    //
-    if (level > 0) {
-        return;
-    }
-
-    for (int i = 0; i <= finest_level; i++)
-    {
-        dt_min[i] = getLevel(i).estTimeStep();
-    }
-
-    if (post_regrid_flag == 1)
-    {
-        //
-        // Limit dt's by pre-regrid dt
-        //
-        for (int i = 0; i <= finest_level; i++)
-        {
-            dt_min[i] = std::min(dt_min[i],dt_level[i]);
-        }
-    }
-    else
-    {
-        //
-        // Limit dt's by change_max * old dt
-        //
-        static Real change_max = 1.1;
-        for (int i = 0; i <= finest_level; i++)
-        {
-            dt_min[i] = std::min(dt_min[i],change_max*dt_level[i]);
-        }
-    }
-
-    //
-    // Find the minimum over all levels
-    //
-    Real dt_0 = std::numeric_limits<Real>::max();
-    int n_factor = 1;
-    for (int i = 0; i <= finest_level; i++)
-    {
-        n_factor *= n_cycle[i];
-        dt_0 = std::min(dt_0,n_factor*dt_min[i]);
-    }
-
-    //
-    // Limit dt's by the value of stop_time.
-    //
-    const Real eps = 0.001*dt_0;
-    Real cur_time  = state[State_Type].curTime();
-    if (stop_time >= 0.0) {
-        if ((cur_time + dt_0) > (stop_time - eps)) {
-            dt_0 = stop_time - cur_time;
-        }
-    }
-
-    n_factor = 1;
-    for (int i = 0; i <= finest_level; i++)
-    {
-        n_factor *= n_cycle[i];
-        dt_level[i] = dt_0/n_factor;
-    }
-}
-
-void
-HydroEXA::post_regrid (int /*lbase*/, int /*new_finest*/)
-{
-}
-
-void
-HydroEXA::post_timestep (int /*iteration*/)
-{
-    BL_PROFILE("post_timestep");
-
-    if (do_reflux && level < parent->finestLevel()) {
-        MultiFab& S = get_new_data(State_Type);
-        HydroEXA& fine_level = getLevel(level+1);
-        fine_level.flux_reg->Reflux(S, Real(1.0), 0, 0, NUM_STATE, geom);
-    }
-
-    if (level < parent->finestLevel()) {
-        avgDown();
-    }
-}
-
-void
-HydroEXA::postCoarseTimeStep (Real /*time*/)
-{
-    BL_PROFILE("postCoarseTimeStep()");
-
-    // This only computes sum on level 0
-    if (verbose >= 2) {
-        printTotal();
-    }
-}
-
-void
-HydroEXA::printTotal () const
-{
-    const MultiFab& S_new = get_new_data(State_Type);
-    std::array<Real,3> tot;
-    for (int comp = 0; comp < 3; ++comp) {
-        tot[comp] = S_new.sum(comp,true) * geom.ProbSize();
-    }
-#ifdef BL_LAZY
-    Lazy::QueueReduction( [=] () mutable {
-#endif
-            ParallelDescriptor::ReduceRealSum(tot.data(), 3, ParallelDescriptor::IOProcessorNumber());
-            amrex::Print().SetPrecision(17) << "\n[HydroEXA] Total mass       is " << tot[0] << "\n"
-                                             <<   "      Total x-momentum is " << tot[1] << "\n"
-                                             <<   "      Total y-momentum is " << tot[2] << "\n";
-#ifdef BL_LAZY
-        });
-#endif
-}
-
-void
-HydroEXA::post_init (Real)
-{
-    if (level > 0) return;
-    for (int k = parent->finestLevel()-1; k >= 0; --k) {
-        getLevel(k).avgDown();
-    }
-
-    if (verbose >= 2) {
-        printTotal();
-    }
-}
-
-void
-HydroEXA::post_restart ()
-{
-}
-
-void
-HydroEXA::errorEst (TagBoxArray& tags, int, int, Real /*time*/, int, int)
-{
-    BL_PROFILE("HydroEXA::errorEst()");
-
-    if (level < refine_max_h_grad_lev || level < refine_max_umag_grad_lev) {
-        const MultiFab& StateNew = get_new_data(State_Type);
-        const Real cur_time = state[State_Type].curTime();
+        amrex::ParmParse pp("io");
+        pp.query("chk_freq", io_params.chk_freq);
+        pp.query("chk_type", io_params.chk_type);    // HDF5, Native
+        pp.query("plot_freq", io_params.plot_freq);
+        pp.query("async_io", io_params.async_io);    // bool for whether to do asynchronous I/O
         
-        MultiFab StateBorder(grids,dmap,NUM_STATE,NUM_GROW,MFInfo(),Factory());
-        FillPatch(*this, StateBorder, NUM_GROW, cur_time, State_Type, 0, NUM_STATE);
+        pp.query("input_file", io_params.input_file);  // HDF5 file containing initial conditions (e.g., DEM)
+        pp.query("plot_file", io_params.plot_file);
+        pp.query("chk_file", io_params.chk_file);
+        
+        // AMReX native checkpoint file
+        pp.query("restart", io_params.restart_chkfile);
+    }
 
-        const char   tagval = TagBox::SET;
+    {
+        // Traditionally, these have prefix, amr.
+        amrex::ParmParse pp("amr");
+        
+        pp.query("regrid_int", amr_params.regrid_int);           // frequency of regridding
+        pp.query("do_reflux", amr_params.do_reflux);             // whether to perform flux correction
+        pp.query("do_subcycle", amr_params.do_subcycle);           // we place this here since it affects the time stepping and regridding logic
+        pp.query("terrain_ref_lev", amr_params.terrain_ref_lev); // AMR level at which to read the initial conditions (default 0)
+        pp.query("max_level", amr_params.max_amr_level);           // Number of levels is max_level + 1
+    }
 
-#ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
-        for (MFIter mfi(StateNew,TilingIfNotGPU()); mfi.isValid(); ++mfi)
-        {
-            const Box& bx = mfi.tilebox();
+    {
+        amrex::ParmParse pp("HydroEXA");
+        pp.query("model", physics_params.model);
+        pp.query("cfl", physics_params.cfl);
+        pp.query("max_time", runtime_params.max_time);
+        pp.query("mass_diag_freq", runtime_params.mass_diag_freq);
 
-            auto const& state = StateBorder.array(mfi);
-            auto const& tag = tags.array(mfi);
+        int n = pp.countval("h_grad_thresh");
+        if (n > 0) {
+            pp.getarr("h_grad_thresh", physics_params.h_grad_thresh, 0, n);
+        }
 
-            amrex::ParallelFor(bx,
-            [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-            {
-                hydroexa_tagging(i, j, k, tag, state, h_grad_threshold, umag_grad_threshold, tagval);
-            });
+        n = pp.countval("umag_grad_thresh");
+        if (n > 0) {
+            pp.getarr("umag_grad_thresh", physics_params.umag_grad_thresh, 0, n);
+        }
+
+        n = pp.countval("z_grad_thresh");
+        if (n > 0) {
+            pp.getarr("z_grad_thresh", physics_params.z_grad_thresh, 0, n);
+        }
+
+        // Boundary conditions: physical BC type integers (0-5)
+        n = pp.countval("lo_bc");
+        if (n > 0) {
+            amrex::Vector<int> lo_bc_tmp(n);
+            pp.getarr("lo_bc", lo_bc_tmp, 0, n);
+            for (int i = 0; i < AMREX_SPACEDIM && i < n; ++i) {
+                physics_params.bc_params.lo_bc[i] = lo_bc_tmp[i];
+            }
+        }
+        n = pp.countval("hi_bc");
+        if (n > 0) {
+            amrex::Vector<int> hi_bc_tmp(n);
+            pp.getarr("hi_bc", hi_bc_tmp, 0, n);
+            for (int i = 0; i < AMREX_SPACEDIM && i < n; ++i) {
+                physics_params.bc_params.hi_bc[i] = hi_bc_tmp[i];
+            }
         }
     }
 }
 
-void
-HydroEXA::read_params ()
+void HydroEXA::Initialize()
 {
-    ParmParse pp("HydroEXA");
+    BL_PROFILE("HydroEXA::Initialize");
 
-    pp.query("v", verbose);
+    IO = std::make_shared<IOHandler>(io_params.input_file);
+    IO->SetPlotfilePrefix(io_params.plot_file);
+    IO->SetPlotfileWriterType(io_params.plot_type);
 
-    Vector<int> tilesize(AMREX_SPACEDIM);
-    if (pp.queryarr("hydro_tile_size", tilesize, 0, AMREX_SPACEDIM))
+    HDF5SpatialMetadata metadata;
+    IO->ReadHDF5Metadata("terrain", metadata);
+
+    // =======================================================================
+    // GEOMETRY CONTRACT
+    //
+    // The HDF5 physical domain is authoritative.
+    //
+    // HydroEXA requires:
+    //   1. Positive dimensions
+    //   2. dx == dy
+    //   3. HDF5 dimensions compatible with terrain_ref_lev
+    //   4. Level-0 dimensions compatible with blocking_factor
+    //   5. The physical domain must not be padded or modified
+    // =======================================================================
+
+    amrex::ParmParse pp_amr("amr");
+    int bf = 8;
+    pp_amr.query("blocking_factor", bf);
+
+    const int terrain_ref_lev = amr_params.terrain_ref_lev;
+    const int refinement_scale = 1 << terrain_ref_lev;
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        bf > 0, 
+        "amr.blocking_factor must be greater than zero."
+    );
+    
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        terrain_ref_lev >= 0, 
+        "amr.terrain_ref_lev must be non-negative."
+    );
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        metadata.global_nx > 0 && metadata.global_ny > 0, 
+        "HDF5 terrain dimensions must be positive."
+    );
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        metadata.dx > 0.0 && metadata.dy > 0.0,
+        "HDF5 terrain cell spacing must be positive."
+    );
+
+    // -----------------------------------------------------------------------
+    // 1. HydroEXA requires square cells.
+    //
+    // The tolerance only accounts for floating-point representation. It must
+    // not be used to accept materially different resolutions.
+    // -----------------------------------------------------------------------
+
+    const amrex::Real geometry_tolerance = 1.e-12 * std::max(amrex::Real(1.0), std::max(std::abs(metadata.dx), std::abs(metadata.dy)));
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        std::abs(metadata.dx - metadata.dy) <= geometry_tolerance, 
+        "HydroEXA requires square HDF5 cells: dx must equal dy."
+    );
+
+    const amrex::Real hdf5_cell_size = 0.5 * (metadata.dx + metadata.dy);
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        metadata.global_nx % refinement_scale == 0, 
+        "HDF5 global_nx must be divisible by 2^amr.terrain_ref_lev."
+    );
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        metadata.global_ny % refinement_scale == 0, 
+        "HDF5 global_ny must be divisible by 2^amr.terrain_ref_lev."
+    );
+
+    const int base_nx = metadata.global_nx / refinement_scale;
+    const int base_ny = metadata.global_ny / refinement_scale;
+    const int base_nz = 0;
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        base_nx > 0 && base_ny > 0, 
+        "Derived level-0 grid dimensions must be positive."
+    );
+    
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        base_nx % bf == 0, 
+        "Level-0 nx is incompatible with amr.blocking_factor. HydroEXA will not pad the physical domain."
+    );
+    
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        base_ny % bf == 0, 
+        "Level-0 ny is incompatible with amr.blocking_factor. HydroEXA will not pad the physical domain."
+    );
+
+    const amrex::Real level0_cell_size = hdf5_cell_size * static_cast<amrex::Real>(refinement_scale);
+    const amrex::Real level0_dx = level0_cell_size;
+    const amrex::Real level0_dy = level0_cell_size;
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        std::abs(level0_dx - level0_dy) <= geometry_tolerance, 
+        "HydroEXA requires square level-0 cells: dx must equal dy."
+    );
+
+    const amrex::Real domain_length_x = metadata.prob_hi_x - metadata.prob_lo_x;
+    const amrex::Real domain_length_y = metadata.prob_hi_y - metadata.prob_lo_y;
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        domain_length_x > 0.0 && domain_length_y > 0.0, 
+        "HDF5 physical domain must have positive extents."
+    );
+
+    const amrex::Real extent_tolerance = 1.e-10 * std::max(amrex::Real(1.0), std::max(std::abs(domain_length_x), std::abs(domain_length_y)));
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        std::abs(static_cast<amrex::Real>(base_nx) * level0_dx - domain_length_x) <= extent_tolerance,
+        "HDF5 x extent is inconsistent with global_nx, terrain_ref_lev, and dx."
+    );
+    
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        std::abs(static_cast<amrex::Real>(base_ny) * level0_dy - domain_length_y) <= extent_tolerance,
+        "HDF5 y extent is inconsistent with global_ny, terrain_ref_lev, and dy."
+    );
+
+    LOG(INFO, "\n============================================================\n"
+              "[GEOM DIAGNOSTIC] HydroEXA Geometry Verification\n"
+              "============================================================\n"
+              "  -> HDF5 Resolution          : " + std::to_string(metadata.global_nx) + " x " + std::to_string(metadata.global_ny) + "\n"
+              "  -> HDF5 Cell Size           : " + std::to_string(hdf5_cell_size) + " m\n"
+              "  -> HDF5 dx / dy             : " + std::to_string(metadata.dx) + " / " + std::to_string(metadata.dy) + " m\n"
+              "  -> Terrain Reference Level  : " + std::to_string(terrain_ref_lev) + "\n"
+              "  -> Refinement Scale         : " + std::to_string(refinement_scale) + "x\n"
+              "  -> Level 0 Resolution       : " + std::to_string(base_nx) + " x " + std::to_string(base_ny) + "\n"
+              "  -> Blocking Factor          : " + std::to_string(bf) + "\n"
+              "  -> Level 0 Cell Size        : " + std::to_string(level0_cell_size) + " m\n"
+              "  -> Physical Domain Low      : [" + std::to_string(metadata.prob_lo_x) + ", " + std::to_string(metadata.prob_lo_y) + "]\n"
+              "  -> Physical Domain High     : [" + std::to_string(metadata.prob_hi_x) + ", " + std::to_string(metadata.prob_hi_y) + "]\n"
+              "  -> Physical Extent          : " + std::to_string(domain_length_x) + " x " + std::to_string(domain_length_y) + " m\n"
+              "  -> Geometry Status          : VALID\n"
+              "============================================================\n\n");
+
+    amrex::Vector<amrex::Real> prob_lo = {metadata.prob_lo_x, metadata.prob_lo_y, 0.0};
+    amrex::Vector<amrex::Real> prob_hi = {metadata.prob_hi_x, metadata.prob_hi_y, 0.0};
+    amrex::Vector<int> n_cell_arr = {base_nx, base_ny, base_nz};
+    amrex::RealBox real_domain(prob_lo.data(), prob_hi.data());
+
+    amrex::Vector<amrex::IntVect> ref_ratios(amr_params.max_amr_level);
+    for (int lev = 0; lev < amr_params.max_amr_level; ++lev) ref_ratios[lev] = amrex::IntVect(AMREX_D_DECL(2, 2, 0));
+
+    const int coord_sys = 0;
+
+    MeshState = std::make_unique<AmrMeshState>(
+        IO, amr_params.terrain_ref_lev, metadata, io_params.input_file,
+        runtime_params, io_params, amr_params, physics_params,
+        real_domain, amr_params.max_amr_level, n_cell_arr, coord_sys, ref_ratios);
+
+    MeshState->Initialize();
+}
+
+void
+HydroEXA::Compute() {
+    BL_PROFILE("HydroEXA::Compute");
+
+    amrex::Real plot_time_next = (io_params.plot_freq > 0) ? io_params.plot_freq : -1.0;
+    amrex::Real chk_time_next  = (io_params.chk_freq  > 0) ? io_params.chk_freq  : -1.0;
+    amrex::Real mass_time_next = (runtime_params.mass_diag_freq > 0) ? runtime_params.mass_diag_freq : -1.0;
+    int plot_iter = 0;
+    int chk_iter  = 0;
+
+    MeshState->WritePlotfile(plot_iter, runtime_params.etime);
+    plot_iter++;
+
+    while (runtime_params.etime < runtime_params.max_time)
     {
-        for (int i=0; i<AMREX_SPACEDIM; i++) hydro_tile_size[i] = tilesize[i];
-    }
+        const double wall_start = amrex::ParallelDescriptor::second();
 
-    pp.query("cfl", cfl);
+        // CFL
+        MeshState->ComputeDt();
 
-    Vector<int> lo_bc(AMREX_SPACEDIM), hi_bc(AMREX_SPACEDIM);
-    pp.getarr("lo_bc", lo_bc, 0, AMREX_SPACEDIM);
-    pp.getarr("hi_bc", hi_bc, 0, AMREX_SPACEDIM);
+        // Advance
+        MeshState->TimeStepWithSubcycling(0, runtime_params.etime, runtime_params.iteration);
 
-    for (int i = 0; i < AMREX_SPACEDIM; ++i) {
-        phys_bc.setLo(i,lo_bc[i]);
-        phys_bc.setHi(i,hi_bc[i]);
-    }
+        runtime_params.etime = MeshState->t_new[0];
+        runtime_params.iteration++;
 
-    pp.query("do_reflux", do_reflux);
-
-    pp.query("refine_max_h_grad_lev", refine_max_h_grad_lev);
-    pp.query("h_grad_threshold", h_grad_threshold);
-    pp.query("refine_max_umag_grad_lev", refine_max_umag_grad_lev);
-    pp.query("umag_grad_threshold", umag_grad_threshold);
-}
-
-void
-HydroEXA::avgDown ()
-{
-    BL_PROFILE("HydroEXA::avgDown()");
-
-    if (level == parent->finestLevel()) return;
-
-    auto& fine_lev = getLevel(level+1);
-
-    MultiFab& S_crse =          get_new_data(State_Type);
-    MultiFab& S_fine = fine_lev.get_new_data(State_Type);
-
-    amrex::average_down(S_fine, S_crse, fine_lev.geom, geom,
-                        0, S_fine.nComp(), parent->refRatio(level));
-
-    const int nghost = 0;
-}
-
-void
-HydroEXA::buildMetrics ()
-{
-    // make sure dx == dy == dz
-    const Real* dx = geom.CellSize();
-    if (std::abs(dx[0]-dx[1]) > Real(1.e-12)*dx[0]) {
-        amrex::Abort("HydroEXA: must have dx == dy\n");
-    }
-}
-
-
-
-Real
-HydroEXA::estTimeStep ()
-{
-    BL_PROFILE("HydroEXA::estTimeStep()");
-
-    const auto dx = geom.CellSizeArray();
-    const MultiFab& S = get_new_data(State_Type);
-
-    amrex::ReduceOps<amrex::ReduceOpMin> reduce_op;
-    amrex::ReduceData<amrex::Real> reduce_data(reduce_op);
-
-    using ReduceTuple = decltype(reduce_data)::Type;
-
-    for (amrex::MFIter mfi(S, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
-    {
-        const amrex::Box& bx = mfi.tilebox();
-        auto const& U = S.const_array(mfi);
-        const amrex::Real dxx = dx[0];
-        const amrex::Real dyy = dx[1];
-
-        reduce_op.eval(bx, reduce_data,
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) -> ReduceTuple
+        // Mass & momentum conservation diagnostics
+        if (runtime_params.mass_diag_freq > 0 &&
+            runtime_params.etime >= mass_time_next)
         {
-            amrex::Real h = U(i,j,k,0);
-            amrex::Real dt_cell = 1.e6; 
+            MeshState->ComputeMassDiagnostics(runtime_params.etime, runtime_params.iteration);
+            mass_time_next += runtime_params.mass_diag_freq;
+        }
 
-            if (h > 1.e-12) { 
-                amrex::Real u = U(i,j,k,1) / h;
-                amrex::Real v = U(i,j,k,2) / h;
-                amrex::Real c = std::sqrt(9.81 * h); 
+        const double wall_end = amrex::ParallelDescriptor::second();
 
-                amrex::Real dt_x = dxx / (std::abs(u) + c);
-                amrex::Real dt_y = dyy / (std::abs(v) + c);
+        if (Verbose() && amrex::ParallelDescriptor::IOProcessor())
+        {
+            LOG(INFO,
+                "[Step "
+                + std::to_string(runtime_params.iteration)
+                + "]"
+                + " t=" + std::to_string(runtime_params.etime)
+                + "  dt=" + std::to_string(MeshState->dt[0])
+                + "  wall=" + std::to_string(wall_end - wall_start) + " s\n");
+        }
 
-                dt_cell = amrex::min(dt_x, dt_y);
-            }
-            return dt_cell;
-        });
+        // Plotfiles
+        if (io_params.plot_freq > 0 &&
+            runtime_params.etime >= plot_time_next)
+        {
+            MeshState->WritePlotfile(plot_iter, runtime_params.etime);
+            plot_time_next += io_params.plot_freq;
+            plot_iter++;
+        }
+
+        // Checkpoints
+        if (io_params.chk_freq > 0 &&
+            runtime_params.etime >= chk_time_next)
+        {
+            MeshState->WriteCheckpoint();
+            chk_time_next += io_params.chk_freq;
+            chk_iter++;
+        }
     }
 
-    // Extract the LOCAL minimum from the GPU to the CPU
-    ReduceTuple local_dt = reduce_data.value();
-    amrex::Real dt_est = amrex::get<0>(local_dt);
-
-    // Apply CFL multiplier to the local estimate
-    dt_est *= cfl;
-
-    ParallelDescriptor::ReduceRealMin(dt_est);
-
-    return dt_est;
-
+    if (Verbose()) {
+        LOG(INFO, "\nSimulation complete: t = " + std::to_string(runtime_params.etime)
+               + " (" + std::to_string(runtime_params.iteration) + " coarse steps)\n");
+    }
 }
 
-Real
-HydroEXA::initialTimeStep ()
-{
-    return estTimeStep();
+void 
+HydroEXA::Finalize() {
+    BL_PROFILE("HydroEXA::Finalize");
+    // Perform any necessary cleanup, final I/O, etc.
 }
-
 

@@ -1,0 +1,78 @@
+name: docs
+
+# Builds the single Sphinx tree in docs/ (design notes + Python API + C++ API)
+# and publishes it to GitHub Pages.
+#
+# Blocking: the C++ doc-comment pass is complete, so the Doxyfile treats an
+# undocumented entity as an error (WARN_IF_UNDOCUMENTED + WARN_AS_ERROR) and
+# Sphinx runs with -W.  A doc comment that goes missing fails the build rather
+# than printing a warning into the log.
+#
+# Branches: `develop` integrates and `main` releases.  Both build, so a docs
+# regression is caught before it reaches a release, but only `main` deploys --
+# API pages rendered from unreleased code never reach the published site.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    paths:
+      - "docs/**"
+      - "include/**"
+      - "src/**"
+      - "PyHydroEXA/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doxygen and graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen graphviz
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install documentation dependencies
+        run: uv sync --group docs
+
+      - name: Doxygen XML (C++ API)
+        run: cd docs/doxygen && doxygen Doxyfile
+
+      - name: Sphinx HTML
+        run: uv run sphinx-build -b html -W --keep-going docs docs/_build/html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    needs: build
+    # Only a release branch publishes; a develop build is a gate, not a site.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
