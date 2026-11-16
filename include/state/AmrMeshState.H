@@ -101,6 +101,9 @@ class AmrMeshState : public amrex::AmrCore {
         void FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
         void FillPatchEta   (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs, int icomp, int ncomp);
         void ComputeEta(int lev, bool from_U_old = false);
+        // R2 helper: derive η = h + z from an arbitrary source U into dst,
+        // over grown tiles (src must carry valid ghosts) + FillBoundary dst.
+        void DeriveEtaFrom(int lev, const amrex::MultiFab& Usrc, amrex::MultiFab& dst);
 
         // Accessible to HydroEXA top class
         amrex::Vector<amrex::Real> t_new;
@@ -143,8 +146,13 @@ class AmrMeshState : public amrex::AmrCore {
         // These are the core state variables that evolve in time and are stored at each AMR level. They are resized and redefined as levels are created or destroyed.
         amrex::Vector<amrex::MultiFab> U_new;
         amrex::Vector<amrex::MultiFab> U_old;
-        amrex::Vector<amrex::MultiFab> Eta;       // Eta_new — current free surface
-        amrex::Vector<amrex::MultiFab> Eta_old;   // Eta from previous coarse step
+        amrex::Vector<amrex::MultiFab> Eta;       // cached η = h + z, refreshed after every U mutation (feeds ctx.Eta → Roe)
+        // η workspaces for GetEtaData (Rule R2: η is derived on demand from
+        // U_old/U_new, never stored as state). The blend branch of GetEtaData
+        // needs BOTH simultaneously, hence two buffers. Overwritten wholesale
+        // on every call — no invariant to maintain, cannot go stale.
+        amrex::Vector<amrex::MultiFab> EtaScratchOld;
+        amrex::Vector<amrex::MultiFab> EtaScratchNew;
         amrex::Vector<amrex::MultiFab> DynamicTerrain;
         
         mutable std::vector<int> pure_fluid_boxes;

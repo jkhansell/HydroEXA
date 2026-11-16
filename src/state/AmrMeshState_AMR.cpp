@@ -4,6 +4,8 @@
 #include <boundaries/BCFill.H>
 #include <utils/Logging.H>
 #include <AMReX_PhysBCFunct.H>
+#include <AMReX_ParallelDescriptor.H>
+#include <AMReX_Print.H>
 
 
 void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrain)
@@ -68,30 +70,93 @@ void AmrMeshState::TerrainMapStaticToDynamic(int lev, amrex::MultiFab& dynTerrai
     dynTerrain.FillBoundary(Geom()[lev].periodicity());
 }
 
+namespace {
+// Extended __device__ lambdas cannot appear inside private member functions
+// (nvcc restriction), so the FluidMap kernels live here as free functions.
+
+// eta_s = h + z on valid cells; eta = z at NODATA so the single primitive
+// h = max(0, eta - z) yields a dry cell with no branch (Rule R4).
+void fill_eta_s (const amrex::MultiFab& fluid, const amrex::MultiFab& terr,
+                 amrex::MultiFab& eta_s)
+{
+    for (amrex::MFIter mfi(eta_s, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+    {
+        const amrex::Box& bx = mfi.validbox();
+        auto const& fl = fluid.const_array(mfi);
+        auto const& tr = terr.const_array(mfi);
+        auto const& es = eta_s.array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            const amrex::Real z = tr(i,j,k,0);
+            es(i,j,k,0) = (tr(i,j,k,1) == -9999.0) ? z : fl(i,j,k,0) + z;
+        });
+    }
+}
+
+// h = max(0, eta - z) on valid cells (Rule R3: the one rebuild primitive).
+void reconstruct_h_from_eta (amrex::MultiFab& U, const amrex::MultiFab& eta,
+                             const amrex::MultiFab& terr)
+{
+    for (amrex::MFIter mfi(U, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+    {
+        const amrex::Box& bx = mfi.validbox();
+        auto const& u  = U.array(mfi);
+        auto const& ef = eta.const_array(mfi);
+        auto const& z  = terr.const_array(mfi);
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+        {
+            u(i,j,k,0) = std::max(amrex::Real(0.0), ef(i,j,k,0) - z(i,j,k,0));
+        });
+    }
+}
+} // anonymous namespace
+
 void AmrMeshState::FluidMapStaticToDynamic(int lev)
 {
     amrex::MultiFab& amr_mf = U_new[lev];
-    
+
     amr_mf.setVal(0.0);
 
     const amrex::Geometry& amr_geom = Geom()[lev];
 
+    // Rule R1 (plans/IdealAMR.md): h is NEVER transported across a
+    // resolution change.  Build eta_s = h + z at the static layer, move the
+    // free surface (constant-preserving under any interpolator), move the
+    // momenta as momenta, then reconstruct h on THIS level's own z via the
+    // single primitive h = max(0, eta - z).
+    amrex::MultiFab eta_s(static_ba, static_dm, 1, 2);
+    fill_eta_s(*StaticFluid, StaticTerrain, eta_s);
+    eta_s.FillBoundary(static_geom.periodicity());
+
     // 2. Static is Finer than AMR: Restrict (Average Down)
-    if (static_terrain_lev > lev) 
+    if (static_terrain_lev > lev)
     {
         amrex::IntVect ratio;
         for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
             ratio[idim] = static_cast<int>(std::round(amr_geom.CellSize(idim) / static_geom.CellSize(idim)));
         }
-        
-        // Use the Geometry-aware 7-argument overload that natively bridges mismatched BoxArrays
-        amrex::average_down(*StaticFluid, amr_mf, 
-                            static_geom, amr_geom, 
-                            0, ncomp_U, ratio);
-    } 
-    
+
+        // Momenta: conservative averaging, comps 1..ncomp_U-1
+        amrex::average_down(*StaticFluid, amr_mf,
+                            static_geom, amr_geom,
+                            1, ncomp_U - 1, ratio);
+
+        // eta: conservative averaging into a scratch, then reconstruct h
+        amrex::MultiFab eta_f(amr_mf.boxArray(), amr_mf.DistributionMap(), 1, 0);
+        amrex::average_down(eta_s, eta_f, static_geom, amr_geom, 0, 1, ratio);
+
+        const amrex::Real eta_f_min = eta_f.min(0);
+        const amrex::Real eta_f_max = eta_f.max(0);
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            amrex::Print() << "[FluidMap eta] lev=" << lev << " restrict: eta_f min/max = "
+                           << eta_f_min << " / " << eta_f_max << "\n";
+        }
+
+        reconstruct_h_from_eta(amr_mf, eta_f, DynamicTerrain[lev]);
+    }
+
     // 3. Static is Coarser than AMR: Prolongate (Interpolate from the custom standalone layer)
-    else 
+    else
     {
         amrex::IntVect ratio;
         for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
@@ -103,11 +168,33 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
         {
             amrex::GpuBndryFuncFab<ExternalBCFill> bndry_func(ExternalBCFill{});
             using BndryPhysBC = amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExternalBCFill>>;
-            BndryPhysBC physbc(static_geom, U_bcs, bndry_func);
-            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, *StaticFluid, 0, 0, ncomp_U,
+
+            // Momenta: prolongate comps 1..ncomp_U-1 of the static fluid
+            BndryPhysBC cphysbc(static_geom, U_bcs, bndry_func);
+            BndryPhysBC fphysbc(amr_geom,    U_bcs, bndry_func);
+            amrex::InterpFromCoarseLevel(amr_mf, dummy_time, *StaticFluid, 1, 1, ncomp_U - 1,
                                          static_geom, amr_geom,
-                                         physbc, 0, physbc, 0, ratio,
-                                         &amrex::cell_cons_interp, U_bcs, 0);
+                                         cphysbc, 1, fphysbc, 1, ratio,
+                                         &amrex::cell_cons_interp, U_bcs, 1);
+
+            // eta: prolongate the free surface into a scratch
+            amrex::MultiFab eta_f(amr_mf.boxArray(), amr_mf.DistributionMap(), 1, ngrow_U);
+            BndryPhysBC cphysbc_eta(static_geom, Eta_bcs, bndry_func);
+            BndryPhysBC fphysbc_eta(amr_geom,    Eta_bcs, bndry_func);
+            amrex::InterpFromCoarseLevel(eta_f, dummy_time, eta_s, 0, 0, 1,
+                                         static_geom, amr_geom,
+                                         cphysbc_eta, 0, fphysbc_eta, 0, ratio,
+                                         &amrex::cell_cons_interp, Eta_bcs, 0);
+
+            const amrex::Real eta_f_min = eta_f.min(0);
+            const amrex::Real eta_f_max = eta_f.max(0);
+            if (amrex::ParallelDescriptor::IOProcessor()) {
+                amrex::Print() << "[FluidMap eta] lev=" << lev << " prolongate: eta_f min/max = "
+                               << eta_f_min << " / " << eta_f_max << "\n";
+            }
+
+            // Reconstruct h on this level's own bathymetry (single primitive)
+            reconstruct_h_from_eta(amr_mf, eta_f, DynamicTerrain[lev]);
         }
     }
 
@@ -118,22 +205,29 @@ void AmrMeshState::FluidMapStaticToDynamic(int lev)
 
 void AmrMeshState::ComputeEta(int lev, bool from_U_old)
 {
-    for (amrex::MFIter mfi(Eta[lev], amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.tilebox();
+    DeriveEtaFrom(lev, from_U_old ? U_old[lev] : U_new[lev], Eta[lev]);
+}
+
+void AmrMeshState::DeriveEtaFrom(int lev, const amrex::MultiFab& Usrc, amrex::MultiFab& dst)
+{
+    for (amrex::MFIter mfi(dst, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
         // compute_fluxes_Impl swaps U_new/U_old by reference in ctx.
         // After swap + update: U_new holds the updated state (t^{n+1}),
         // U_old holds the old state (t^n).
-        // from_U_old=true  → read U_old (NOT used currently, reserved)
-        // from_U_old=false → read U_new (updated state, correct after compute_fluxes)
-        auto const& u = from_U_old ? U_old[lev].const_array(mfi)
-                                   : U_new[lev].const_array(mfi);
+        // Growntilebox: the fill machinery (FillPatchTwoLevels /
+        // FillCoarsePatch) reads coarse-source ghosts via ParallelCopy, so
+        // η must exist on the ghost ring too — Usrc carries valid ghosts.
+        const amrex::Box& bx = mfi.growntilebox();
+        auto const& u   = Usrc.const_array(mfi);
         auto const& z   = DynamicTerrain[lev].const_array(mfi);
-        auto const& eta = Eta[lev].array(mfi);
+        auto const& eta = dst.array(mfi);
 
         amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
             eta(i,j,k,0) = u(i,j,k,0) + z(i,j,k,0);
         });
     }
+
+    dst.FillBoundary(Geom(lev).periodicity());
 }
 
 void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time, 
@@ -145,7 +239,8 @@ void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time,
     U_new[lev].define(ba, dm, ncomp_U, ngrow_U);
     U_old[lev].define(ba, dm, ncomp_U, ngrow_U);
     Eta[lev].define(ba, dm, 1, ngrow_U);
-    Eta_old[lev].define(ba, dm, 1, ngrow_U);
+    EtaScratchOld[lev].define(ba, dm, 1, ngrow_U);
+    EtaScratchNew[lev].define(ba, dm, 1, ngrow_U);
     DynamicTerrain[lev].define(ba, dm, ncomp_Terrain, ngrow_Terrain);
 
     t_new[lev] = time;
@@ -173,9 +268,7 @@ void AmrMeshState::MakeNewLevelFromScratch(int lev, amrex::Real time,
     U_new[lev].FillBoundary(Geom(lev).periodicity());
     U_old[lev].FillBoundary(Geom(lev).periodicity());
     Eta[lev].FillBoundary(Geom(lev).periodicity());
-    Eta_old[lev].FillBoundary(Geom(lev).periodicity());
-    // At t=0 there is no previous step; Eta_old = Eta initially.
-    amrex::MultiFab::Copy(Eta_old[lev], Eta[lev], 0, 0, 1, 0);
+
     DynamicTerrain[lev].FillBoundary(Geom(lev).periodicity());
 
     if (lev > 0 && amr_p.do_reflux) {
@@ -290,7 +383,8 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
     U_new[lev].define(ba, dm, ncomp_U, ngrow_U);
     U_old[lev].define(ba, dm, ncomp_U, ngrow_U);
     Eta[lev].define(ba, dm, 1, ngrow_U);
-    Eta_old[lev].define(ba, dm, 1, ngrow_U);
+    EtaScratchOld[lev].define(ba, dm, 1, ngrow_U);
+    EtaScratchNew[lev].define(ba, dm, 1, ngrow_U);
     DynamicTerrain[lev].define(ba, dm, ncomp_Terrain, ngrow_Terrain);
         
     // We use our terrain static representation
@@ -298,11 +392,35 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
 
     FillCoarsePatchTerrain(lev, time, DynamicTerrain[lev], Terrain_bcs);
 
-    // A newly created level must start from the coarse state.  This call was
-    // missing, which left U_new uninitialised until the first FillPatch.
-    // Eta is then derived from that state instead of being interpolated on its
-    // own, so h and eta are consistent by construction.
-    FillCoarsePatch(lev, time, U_new[lev], U_bcs);
+    // A newly created level must start from the coarse state.  Rule R1: the
+    // free surface eta is what crosses the resolution change (constant-
+    // preserving), momenta cross as momenta, and h is reconstructed on THIS
+    // level's own z.  (The previous version FillCoarsePatch'd U — i.e. it
+    // interpolated h — which taints eta by the h-interpolation error.)
+    {
+        amrex::MultiFab eta_new(ba, dm, 1, ngrow_U);
+        FillCoarsePatchEta(lev, time, eta_new, Eta_bcs);
+        FillCoarsePatchMomentum(lev, time, U_new[lev], U_bcs);
+
+        const amrex::Real eta_new_min = eta_new.min(0);
+        const amrex::Real eta_new_max = eta_new.max(0);
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            amrex::Print() << "[MakeNewLevelFromCoarse eta] lev=" << lev
+                           << " eta min/max = " << eta_new_min << " / " << eta_new_max << "\n";
+        }
+
+        for (amrex::MFIter mfi(U_new[lev], amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+        {
+            const amrex::Box& bx = mfi.validbox();
+            auto const& u   = U_new[lev].array(mfi);
+            auto const& ef  = eta_new.const_array(mfi);
+            auto const& z   = DynamicTerrain[lev].const_array(mfi);
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+            {
+                u(i,j,k,0) = std::max(amrex::Real(0.0), ef(i,j,k,0) - z(i,j,k,0));
+            });
+        }
+    }
     ComputeEta(lev, false);
 
     // Recompute h = max(0, eta - z) from the live free surface.
@@ -322,9 +440,6 @@ void AmrMeshState::MakeNewLevelFromCoarse(int lev, amrex::Real time,
     U_new[lev].FillBoundary(Geom(lev).periodicity());
     U_old[lev].FillBoundary(Geom(lev).periodicity());
     Eta[lev].FillBoundary(Geom(lev).periodicity());
-    Eta_old[lev].FillBoundary(Geom(lev).periodicity());
-    // At creation there is no previous step; Eta_old = Eta initially.
-    amrex::MultiFab::Copy(Eta_old[lev], Eta[lev], 0, 0, 1, 0);
 
     // 3. Dynamic Flux Register Hook
     if (lev > 0 && amr_p.do_reflux) {
@@ -342,16 +457,45 @@ void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray&
     amrex::MultiFab new_U(ba, dm, ncomp_U, ngrow_U);
     amrex::MultiFab old_U(ba, dm, ncomp_U, ngrow_U);
     amrex::MultiFab new_Eta(ba, dm, 1, ngrow_U);
-    amrex::MultiFab new_Eta_old(ba, dm, 1, ngrow_U);
+    amrex::MultiFab new_EtaScratchOld(ba, dm, 1, ngrow_U);
+    amrex::MultiFab new_EtaScratchNew(ba, dm, 1, ngrow_U);
     amrex::MultiFab new_DT(ba, dm, ncomp_Terrain, ngrow_Terrain);
     
-    FillPatch(lev, time, new_U, U_bcs, 0, ncomp_U);
     TerrainMapStaticToDynamic(lev, new_DT);
+
+    // Rule R1: transport eta (+ momenta) across the remake, reconstruct h
+    // on the new level's own z.  (Previously U was FillPatch'd, i.e. h
+    // was interpolated across the resolution change.)
+    {
+        amrex::MultiFab eta_new(ba, dm, 1, ngrow_U);
+        FillPatchEta(lev, time, eta_new, Eta_bcs, 0, 1);
+        FillPatch(lev, time, new_U, U_bcs, 1, ncomp_U - 1);   // momenta only
+
+        const amrex::Real eta_new_min = eta_new.min(0);
+        const amrex::Real eta_new_max = eta_new.max(0);
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            amrex::Print() << "[RemakeLevel eta] lev=" << lev
+                           << " eta min/max = " << eta_new_min << " / " << eta_new_max << "\n";
+        }
+
+        for (amrex::MFIter mfi(new_U, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
+        {
+            const amrex::Box& bx = mfi.validbox();
+            auto const& u   = new_U.array(mfi);
+            auto const& ef  = eta_new.const_array(mfi);
+            auto const& z   = new_DT.const_array(mfi);
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+            {
+                u(i,j,k,0) = std::max(amrex::Real(0.0), ef(i,j,k,0) - z(i,j,k,0));
+            });
+        }
+    }
         
     std::swap(new_U, U_new[lev]);
     std::swap(old_U, U_old[lev]);
     std::swap(new_Eta, Eta[lev]);
-    std::swap(new_Eta_old, Eta_old[lev]);
+    std::swap(new_EtaScratchOld, EtaScratchOld[lev]);
+    std::swap(new_EtaScratchNew, EtaScratchNew[lev]);
     std::swap(new_DT, DynamicTerrain[lev]);
 
     ComputeEta(lev, false);
@@ -370,9 +514,6 @@ void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray&
     t_new[lev] = time; 
     t_old[lev] = time - 1.e200;
 
-    // No previous step at remake; Eta_old = Eta initially.
-    amrex::MultiFab::Copy(Eta_old[lev], Eta[lev], 0, 0, 1, 0);
-
     if (lev > 0 && amr_p.do_reflux) {
         flux_reg[lev] = std::make_unique<amrex::FluxRegister>(
             ba, dm, refRatio(lev - 1), lev, ncomp_U
@@ -386,7 +527,8 @@ void AmrMeshState::ClearLevel(int lev) {
     U_new[lev].clear();
     U_old[lev].clear();
     Eta[lev].clear();
-    Eta_old[lev].clear();
+    EtaScratchOld[lev].clear();
+    EtaScratchNew[lev].clear();
     DynamicTerrain[lev].clear();
 }
 
@@ -407,7 +549,7 @@ void AmrMeshState::FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, am
 
         amrex::FillPatchFrom(mf, time,
                              {}, stime, smf, stime,
-                             0, icomp, ncomp,
+                             icomp, icomp, ncomp,
                              Geom()[0], Geom()[0],
                              bcs, amrex::IntVect::TheZeroVector(),
                              &amrex::cell_cons_interp);
@@ -419,7 +561,7 @@ void AmrMeshState::FillPatch (int lev, amrex::Real time, amrex::MultiFab& mf, am
 
         amrex::FillPatchFrom(mf, time,
                              cmf, ctime, fmf, ftime,
-                             0, icomp, ncomp,
+                             icomp, icomp, ncomp,
                              Geom()[lev-1], Geom()[lev],
                              bcs, refRatio(lev-1));
     }
@@ -433,7 +575,7 @@ void AmrMeshState::FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab&
 
         amrex::FillPatchFrom(mf, time,
                              {}, stime, smf, stime,
-                             0, icomp, ncomp,
+                             icomp, icomp, ncomp,
                              Geom()[0], Geom()[0],
                              bcs, amrex::IntVect::TheZeroVector(),
                              &amrex::pc_interp);
@@ -445,7 +587,7 @@ void AmrMeshState::FillPatchTerrain (int lev, amrex::Real time, amrex::MultiFab&
 
         amrex::FillPatchFrom(mf, time,
                              cmf, ctime, fmf, ftime,
-                             0, icomp, ncomp,
+                             icomp, icomp, ncomp,
                              Geom()[lev-1], Geom()[lev],
                              bcs, refRatio(lev-1),
                              &amrex::pc_interp);
@@ -460,7 +602,7 @@ void AmrMeshState::FillPatchEta (int lev, amrex::Real time, amrex::MultiFab& mf,
 
         amrex::FillPatchFrom(mf, time,
                              {}, stime, smf, stime,
-                             0, icomp, ncomp,
+                             icomp, icomp, ncomp,
                              Geom()[0], Geom()[0],
                              bcs, amrex::IntVect::TheZeroVector(),
                              &amrex::cell_cons_interp);
@@ -472,7 +614,7 @@ void AmrMeshState::FillPatchEta (int lev, amrex::Real time, amrex::MultiFab& mf,
 
         amrex::FillPatchFrom(mf, time,
                              cmf, ctime, fmf, ftime,
-                             0, icomp, ncomp,
+                             icomp, icomp, ncomp,
                              Geom()[lev-1], Geom()[lev],
                              bcs, refRatio(lev-1),
                              &amrex::cell_cons_interp);
@@ -547,10 +689,8 @@ void AmrMeshState::FillCoarsePatchMomentum (
 
     amrex::FillCoarsePatchFrom(mf, time, *cmf[0], 1, 1, 2,
                                Geom()[lev-1], Geom()[lev],
-                               bcs, refRatio(lev-1));
+                               bcs, refRatio(lev-1), &amrex::cell_cons_interp);
 }
-
-
 
 void AmrMeshState::AverageDown (amrex::Vector<amrex::MultiFab>& arr) {
     for (int lev = finestLevel()-1; lev >= 0; --lev) {

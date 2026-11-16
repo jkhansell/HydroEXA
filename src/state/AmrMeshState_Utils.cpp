@@ -1,6 +1,7 @@
 #include <state/AmrMeshState.H>
 #include <io/CheckpointerContext.H>
 #include <utils/Logging.H>
+#include <AMReX_Algorithm.H>   // amrex::almostEqual
 #include <limits>
 
 
@@ -15,22 +16,36 @@ void AmrMeshState::GetEtaData(int lev, amrex::Real time, amrex::Vector<amrex::Mu
     data.clear();
     datatime.clear();
 
-    const amrex::Real teps = (t_new[lev] - t_old[lev]) * 1.e-3;
-
-    if (time > t_new[lev] - teps && time < t_new[lev] + teps)
+    // Time selector, faithful to the AMReX reference (Tests/Amr/Advection_AmrCore,
+    // Source/AmrCoreAdv.cpp GetData): almostEqual is RELATIVE
+    // (|x-y| <= eps*|x+y|*ulp), so it matches only genuine step endpoints.
+    // A level that owns a single time level carries the creation sentinel
+    // t_old = t_new - 1.e200; there the t_new test wins and the sentinel never
+    // enters arithmetic (|x-y| = 1.e200 can never satisfy the test).
+    // The previous window (t_new-t_old)*1.e-3 turned that sentinel into a
+    // 1.e197 tolerance, which matched every request and made the branches
+    // below unreachable.
+    if (amrex::almostEqual(time, t_new[lev], 5))
     {
-        data.push_back(&Eta[lev]);
+        // η(t_new) = h(U_new) + z, derived on demand (Rule R2)
+        DeriveEtaFrom(lev, U_new[lev], EtaScratchNew[lev]);
+        data.push_back(&EtaScratchNew[lev]);
         datatime.push_back(t_new[lev]);
     }
-    else if (time > t_old[lev] - teps && time < t_old[lev] + teps)
+    else if (amrex::almostEqual(time, t_old[lev], 5))
     {
-        data.push_back(&Eta_old[lev]);
+        // η(t_old) = h(U_old) + z, derived on demand (Rule R2)
+        DeriveEtaFrom(lev, U_old[lev], EtaScratchOld[lev]);
+        data.push_back(&EtaScratchOld[lev]);
         datatime.push_back(t_old[lev]);
     }
     else
     {
-        data.push_back(&Eta_old[lev]);
-        data.push_back(&Eta[lev]);
+        // Blend pair: both surfaces derived from their own U
+        DeriveEtaFrom(lev, U_old[lev], EtaScratchOld[lev]);
+        DeriveEtaFrom(lev, U_new[lev], EtaScratchNew[lev]);
+        data.push_back(&EtaScratchOld[lev]);
+        data.push_back(&EtaScratchNew[lev]);
         datatime.push_back(t_old[lev]);
         datatime.push_back(t_new[lev]);
     }
@@ -41,14 +56,12 @@ void AmrMeshState::GetData(int lev, amrex::Real time, amrex::Vector<amrex::Multi
     data.clear();
     datatime.clear();
 
-    const amrex::Real teps = (t_new[lev] - t_old[lev]) * 1.e-3;
-
-    if (time > t_new[lev] - teps && time < t_new[lev] + teps)
+    if (amrex::almostEqual(time, t_new[lev], 5))
     {
         data.push_back(&U_new[lev]);
         datatime.push_back(t_new[lev]);
     }
-    else if (time > t_old[lev] - teps && time < t_old[lev] + teps)
+    else if (amrex::almostEqual(time, t_old[lev], 5))
     {
         data.push_back(&U_old[lev]);
         datatime.push_back(t_old[lev]);

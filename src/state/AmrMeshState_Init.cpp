@@ -74,7 +74,8 @@ void AmrMeshState::ResizeLevels(int nlevs) {
     U_new.resize(nlevs);
     U_old.resize(nlevs);
     Eta.resize(nlevs);
-    Eta_old.resize(nlevs);
+    EtaScratchOld.resize(nlevs);
+    EtaScratchNew.resize(nlevs);
     DynamicTerrain.resize(nlevs);
 
     t_new.resize(nlevs);
@@ -108,14 +109,6 @@ void AmrMeshState::Initialize() {
         // is tackled by physics
         StaticFluid.reset();
     }
-
-    // We do this in HydroEXA.cpp
-    // IO->WritePlotfile(
-    //     U_new, DynamicTerrain, 
-    //     initial_step, time, 
-    //     Geom(), refRatio(), 
-    //     finest_level
-    // );
 }
 
 
@@ -152,7 +145,6 @@ void AmrMeshState::InitializeTerrainFluid() {
 
     StaticTerrain.setVal(-9999.0);
     StaticFluid->setVal(0.0);
-
 
     // 4. Execute the parallel hyperslab readers
     for (amrex::MFIter mfi(StaticTerrain); mfi.isValid(); ++mfi)
