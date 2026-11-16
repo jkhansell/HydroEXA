@@ -4,6 +4,49 @@
 #include <AMReX_REAL.H>
 #include <utils/Constants.H>
 
+/**
+ * \file kernels/Roe.H
+ * \brief Device kernel for the classic Roe flux, with the bed and friction
+ *        terms split across the waves.
+ *
+ * One call per face.  The kernel returns three things rather than one -- the
+ * physical flux and the two halves of an upwinded source -- because the
+ * classic solver applies the bed slope and friction *inside* the Riemann
+ * problem instead of as a cell update afterwards.  Splitting the source across
+ * the waves is what allows each half to be delivered to the cell the wave is
+ * leaving, so the result is an exact fluctuation-differencing update rather
+ * than a central source plus a correction.
+ *
+ * Everything happens in face-normal coordinates: the velocities are rotated
+ * onto the face, the Riemann problem is solved in 1-D, and the momentum
+ * components are rotated back.  At the current call sites ``(nx, ny)`` is an
+ * axis unit vector, so the rotation is trivial, but keeping it general is what
+ * lets the kernel ignore which direction it was called for.
+ *
+ * The companion ``kernels/HydrostaticRoe.H`` declares a function with the same
+ * name and a different signature.  That collision is deliberate and contained:
+ * each solver's ``.cpp`` includes exactly one of the two, so the overloads
+ * never meet in a single translation unit.  Do not include both.
+ */
+
+/**
+ * \brief Roe flux and upwinded source halves for one face.
+ *
+ * \param hi,hui,hvi   Left-cell state: depth and the two momentum components.
+ * \param zi           Left-cell bed elevation.
+ * \param ni           Left-cell Manning roughness coefficient.
+ * \param hj,huj,hvj   Right-cell state.
+ * \param zj           Right-cell bed elevation.
+ * \param nj           Right-cell Manning roughness coefficient.
+ * \param F            [out] Physical flux through the face, three components.
+ * \param S_minus      [out] Source share carried by right-going waves
+ *                     (``lambda > 0``); the right cell sees ``F - S_minus``.
+ * \param S_plus       [out] Source share carried by left-going waves
+ *                     (``lambda < 0``); the left cell sees ``F + S_plus``.
+ * \param dt           Timestep; only the positivity guard below uses it.
+ * \param dx           Face-normal cell size, for the friction length scale.
+ * \param nx,ny        Face-normal unit vector.
+ */
 AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 void roeSolver(
     amrex::Real hi, amrex::Real hui, amrex::Real hvi, amrex::Real zi, amrex::Real ni,
@@ -18,6 +61,10 @@ void roeSolver(
 ) {
 
     // --- dry handling ---
+    // Below TOLDRY the cell holds no water, so depth is zeroed *before* any
+    // division.  TOLDRY is smaller than the dry/wet reporting threshold on
+    // purpose: a cell must fall further to be treated as dry inside the flux
+    // than it must to be reported dry, which stops the shoreline chattering.
     hi = (hi >= Tolerances::TOLDRY()) ? hi : 0.0;
     hj = (hj >= Tolerances::TOLDRY()) ? hj : 0.0;
 
@@ -25,6 +72,9 @@ void roeSolver(
     amrex::Real sqrt_j = (hj > 0.0) ? std::sqrt(hj) : 0.0;
 
     // --- primitive variables ---
+    // Guarded rather than divided blindly: on a dry cell the momentum is
+    // already zero, and 0/0 would poison the Roe averages with a NaN that
+    // propagates to every face the cell touches.
     amrex::Real ui = (hi > 0.0) ? hui / hi : 0.0;
     amrex::Real vi = (hi > 0.0) ? hvi / hi : 0.0;
 
@@ -39,6 +89,10 @@ void roeSolver(
     amrex::Real vhatj = -uj * ny + vj * nx;
 
     // --- Roe averages ---
+    // Depth is the arithmetic mean, floored at TOLDRY, while the velocities
+    // use the square-root weighting the Roe linearisation requires.  The floor
+    // is not cosmetic: it keeps the wave speed c = sqrt(g h) strictly positive,
+    // so a face between two dry cells still has finite eigenvalues.
     amrex::Real htilde = (0.5 * (hi + hj) > Tolerances::TOLDRY()) ? 0.5 * (hi + hj) : Tolerances::TOLDRY();
     amrex::Real ctilde = std::sqrt(PhysConstants::GRAV() * htilde);
 
@@ -52,6 +106,10 @@ void roeSolver(
     amrex::Real lambda2 = utilde + ctilde;
 
     // --- entropy fix Harten Hyman---
+    // Applied only where an acoustic wave straddles zero, i.e. where the
+    // characteristic is sonic.  Without it a transonic rarefaction is resolved
+    // as an expansion shock: the scheme converges to a weak solution that the
+    // physics does not admit.
     {
         amrex::Real ei = uhati - std::sqrt(PhysConstants::GRAV() * hi);
         amrex::Real ej = uhatj - std::sqrt(PhysConstants::GRAV() * hj);
@@ -75,18 +133,28 @@ void roeSolver(
     amrex::Real dhu = hj * uhatj - hi * uhati;
     amrex::Real dhv = hj * vhatj - hi * vhati;
 
+    // --- wave strengths ---
+    // Project the state jump onto the three right eigenvectors: the two
+    // acoustic waves and the contact.  denom and ctilde carry a tolerance
+    // because both can be zero on a dry face.
     amrex::Real alpha0 = (lambda2 * dh - dhu) / denom;
     amrex::Real alpha1 = (-vtilde * dh + dhv) / ctilde;
     amrex::Real alpha2 = (-lambda0 * dh + dhu) / denom;
 
     // --- source terms ---
+    // Two discretizations of the bed-slope thrust compete here.  thrust_a is
+    // the centred -g h dz; thrust_b is the depth-limited upwind form, which
+    // measures the thrust over the wetted part of the step rather than the
+    // whole column.  The choice below is the one that does not over-deepen a
+    // cell sitting on a wetting front, where the centred form would invent
+    // momentum from a bed the water has not reached yet.
     amrex::Real dz = zj - zi;
     amrex::Real di = hi + zi;
     amrex::Real dj = hj + zj;
     amrex::Real dd = dj - di;
 
     amrex::Real thrust, tau;
-	
+
     {
         amrex::Real thrust_a = -PhysConstants::GRAV() * htilde * dz;
 
@@ -107,6 +175,10 @@ void roeSolver(
                         ? std::max(thrust_a, thrust_b)
                         : thrust_b;
 
+        // Manning friction, per unit length across the face.  h^(4/3) is
+        // written cbrt(h)*h; the max() floor keeps a nearly dry cell from
+        // producing an unbounded drag coefficient, which would otherwise
+        // freeze the timestep.
         amrex::Real ntilde = 0.5 * (ni + nj);
 
         amrex::Real sf = (ntilde * ntilde *
@@ -115,13 +187,24 @@ void roeSolver(
 
         tau = PhysConstants::GRAV() * htilde * sf * dx;
     }
-	
+
+    // --- split the source across the waves ---
+    // Only the two acoustic waves carry it, with equal and opposite shares
+    // (beta2 = -beta0), so the source changes momentum without adding mass.
+    // The contact wave (beta1) carries nothing: friction and bed slope act on
+    // the momentum equations, not on continuity.
     amrex::Real beta0 = (thrust - tau) / denom;
     amrex::Real beta1 = 0.0;
     amrex::Real beta2 = -beta0;
 
     {
         // compute stars (short lifetime)
+        // Positivity guard.  Each acoustic wave aims to leave a star depth
+        // behind it; if that depth would be negative, and the wave arrives
+        // within the local timestep, the source share is limited to the value
+        // that just empties the cell instead.  Without it a drying front
+        // produces a negative depth that the update has to clamp away, and the
+        // mass lost in that clamp is not accounted for anywhere.
         const amrex::Real lambda0_safe = (std::abs(lambda0) > Tolerances::TOL12()) ? lambda0 : (lambda0 >= 0.0 ? Tolerances::TOL12() : -Tolerances::TOL12());
         const amrex::Real lambda2_safe = (std::abs(lambda2) > Tolerances::TOL12()) ? lambda2 : (lambda2 >= 0.0 ? Tolerances::TOL12() : -Tolerances::TOL12());
 
@@ -175,6 +258,10 @@ void roeSolver(
     F[2] = 0.5 * (hi * uhati * vhati + hj * uhatj * vhatj);
 
     // --- Compute Wave Contributions ---
+    // Each wave removes 0.5|lambda_k| alpha_k from the central flux: that is
+    // the upwind part of the Roe flux.  The same loop distributes the source
+    // share of the wave to whichever side the wave is leaving, which is why
+    // the two happen together rather than in separate passes.
     for (int k = 0; k < 3; k++) {
         amrex::Real lambda_k = (k == 0) ? lambda0 : ((k == 1) ? lambda1 : lambda2);
         amrex::Real alpha_k  = (k == 0) ? alpha0  : ((k == 1) ? alpha1  : alpha2);
