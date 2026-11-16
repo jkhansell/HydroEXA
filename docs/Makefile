@@ -17,9 +17,11 @@ DOXYFILE   := doxygen/Doxyfile
 
 DOXYGEN    ?= doxygen
 SPHINXBUILD ?= uv run sphinx-build
-# Advisory while the doc-comment pass is pending: collect all problems, fail
-# nothing.  `make strict` flips to -W once the headers are documented.
-SPHINXOPTS ?= --keep-going
+# The doc-comment pass is complete, so warnings are now failures: an
+# undocumented C++ entity stops Doxygen (WARN_AS_ERROR in the Doxyfile) and a
+# warning from Sphinx stops this build.  `--keep-going` keeps reporting the
+# rest of the tree instead of stopping at the first one.
+SPHINXOPTS ?= -W --keep-going
 
 .PHONY: help doxygen html strict linkcheck clean
 
@@ -36,7 +38,7 @@ doxygen:
 html: doxygen
 	$(SPHINXBUILD) -b html $(SPHINXOPTS) "$(SOURCEDIR)" "$(BUILDDIR)/html"
 
-strict: SPHINXOPTS = -W --keep-going
+# Historic alias for the same strict build `html` now performs.
 strict: html
 
 linkcheck:

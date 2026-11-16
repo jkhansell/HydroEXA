@@ -101,15 +101,19 @@ The build artifacts (`docs/_build/`, `docs/doxygen/xml/`,
 
 ## Documentation roadmap
 
-The scaffolding is deliberately layout-agnostic, because the two things that
-still have to happen will both move code around:
+Two items were on this list when the tree was scaffolded. The first is done; the
+second still moves code around and is still ahead.
 
-1. **Doc-comment every C++ entity.** Doxygen currently runs with
-   `WARN_IF_UNDOCUMENTED = NO` and `EXTRACT_ALL = YES`, so the API pages show
-   the real structure of the solver with little prose. The endpoint is one
-   `/** ... */` block per public type, function and parameter, then flipping
-   `WARN_IF_UNDOCUMENTED = YES` in `docs/doxygen/Doxyfile` and building with
-   `-W` as a gate. No page in this tree needs editing while that happens.
+1. **Doc-comment every C++ entity** — done. Every file, type, function and
+   parameter in `include/` carries a `/** ... */` block, the Doxyfile now sets
+   `WARN_IF_UNDOCUMENTED = YES` and `WARN_AS_ERROR = YES`, and both
+   `make -C docs html` and CI build with `-W`. A missing comment fails the
+   build instead of printing a warning into the log.
+   `EXTRACT_ALL` stays on deliberately: it keeps the index structurally
+   complete, so a forgotten entity shows up as an empty description in the
+   output *and* as an error, rather than as a page that silently does not
+   exist. No page in this tree needed editing for the pass, which is the
+   property the scaffold was chosen for.
 2. **Migrate the case analysis code into `pyhydroexa.analysis`.** The per-case
    scripts (`tests/dambreak/analyze.py`, `metrics_table.py`, `plot.py`,
    `plot_output.py`, …) encode reusable knowledge — length-weighted norms, the

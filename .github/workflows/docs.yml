@@ -3,11 +3,10 @@ name: docs
 # Builds the single Sphinx tree in docs/ (design notes + Python API + C++ API)
 # and publishes it to GitHub Pages.
 #
-# Advisory by design: the HTML is built and deployed even when Sphinx reports
-# warnings, because the doc-comment pass on the C++ headers is still pending.
-# Once `docs/doxygen/Doxyfile` sets WARN_IF_UNDOCUMENTED=YES, promote the build
-# step to blocking by deleting `continue-on-error` and adding `-W` (the
-# Makefile already passes it via SPHINXOPTS).
+# Blocking: the C++ doc-comment pass is complete, so the Doxyfile treats an
+# undocumented entity as an error (WARN_IF_UNDOCUMENTED + WARN_AS_ERROR) and
+# Sphinx runs with -W.  A doc comment that goes missing fails the build rather
+# than only printing a warning into the log.
 
 on:
   push:
@@ -54,8 +53,7 @@ jobs:
         run: cd docs/doxygen && doxygen Doxyfile
 
       - name: Sphinx HTML
-        continue-on-error: true   # advisory until the doc-comment pass lands
-        run: uv run sphinx-build -b html docs docs/_build/html
+        run: uv run sphinx-build -b html -W --keep-going docs docs/_build/html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

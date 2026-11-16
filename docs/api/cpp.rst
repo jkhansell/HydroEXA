@@ -27,8 +27,9 @@ change; new public types appear here without an edit.
 
 .. note::
 
-   While the documentation pass is in progress the Doxyfile sets
-   ``EXTRACT_ALL = YES`` and ``WARN_IF_UNDOCUMENTED = NO``: the structure is
-   real, the prose is not yet.  The endpoint is ``WARN_IF_UNDOCUMENTED = YES``
-   plus ``-W`` in CI, at which point every public entity must carry a
-   doc-comment.
+   Every entity in ``include/`` carries a doc comment, so the Doxyfile runs
+   with ``WARN_IF_UNDOCUMENTED = YES`` and ``WARN_AS_ERROR = YES``: a new type,
+   function or parameter without a comment fails the build rather than printing
+   a warning into the log.  ``EXTRACT_ALL = YES`` stays on — it keeps the index
+   structurally complete, so a gap shows up as an empty description in the
+   output *and* as an error, instead of as a page that silently does not exist.
