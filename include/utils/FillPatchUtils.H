@@ -20,9 +20,12 @@
  * AMReX: the boundary-condition functor and the interpolation/refinement logic
  * are still AMReX's.
  *
- * Both wrappers use ``ExternalBCFill`` for physical boundaries, so a face is
- * reflective or transmissive according to the ``BCRec`` array passed in; they
- * do not invent a BC of their own.
+ * Both wrappers pass ``ExternalBCFill`` as the physical-boundary functor.  That
+ * functor is deliberately empty: AMReX fills ``reflect_even``, ``reflect_odd``
+ * and ``foextrap`` ghost cells from the ``BCRec`` codes itself, and this solver
+ * never uses ``ext_dir``.  Face behaviour is therefore entirely the ``BCRec``
+ * the caller supplies -- see ``boundaries/BCFill.H`` for how an input-file code
+ * becomes one of those three.
  */
 
 namespace amrex {
