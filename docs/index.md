@@ -82,8 +82,8 @@ live in `pyhydroexa/audit/report.py` where they can be argued with.
 ## Building these docs
 
 ```bash
-# once, from the repository root (uv only, no conda)
-uv sync --group docs
+# once: the Sphinx environment (docs/pyproject.toml, its own uv project)
+cd docs && uv sync --locked && cd ..
 
 # Doxygen XML (only needed for the C++ API pages)
 make -C docs doxygen
@@ -94,6 +94,14 @@ make -C docs html
 
 `make -C docs html` runs both steps and drops straight back out if `doxygen`
 is not on `PATH`.
+
+The Sphinx environment is deliberately not the repository workspace.
+`docs/pyproject.toml` installs the Sphinx stack plus `numpy`, `scipy` and
+`matplotlib` -- the three libraries `pyhydroexa` imports at module level -- and
+nothing else.  The package's heavier dependencies (`yt`, `geopandas`,
+`rasterio`, `fiona`) are imported inside functions, so the docs build never
+needs them, and never depends on a wheel existing for the interpreter that
+happens to be running.
 
 On Kabré (where this is developed) the pieces are not in the system image, so:
 

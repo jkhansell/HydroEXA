@@ -12,6 +12,14 @@ by the Doxygen ``INPUT`` directories and the Python side by walking
 merged without touching this configuration.  The intended direction is for
 per-test analysis code to migrate *into* ``pyhydroexa`` (see the roadmap in
 ``index.md``), and those pages will appear automatically once it does.
+
+The build environment is ``docs/pyproject.toml``: a uv project of its own,
+excluded from the repository workspace, holding the Sphinx stack plus
+``numpy``, ``scipy`` and ``matplotlib``.  Those three are what ``pyhydroexa``
+imports at module level; everything else it uses is imported inside functions,
+which is what lets this build run without GDAL or ``yt`` installed.  Adding a
+module-level heavy import to the package therefore changes the docs
+environment too -- the autodoc pass imports modules, it does not read them.
 """
 
 from __future__ import annotations
@@ -139,6 +147,10 @@ html_theme_options = {
 }
 exclude_patterns = [
     "_build",
+    # The docs environment lives in docs/.venv, inside this source directory.
+    # Sphinx scans the tree recursively, so without this it tries to build the
+    # autosummary templates shipped inside site-packages as if they were pages.
+    ".venv",
     "doxygen/xml",
     "doxygen/html",
     "Thumbs.db",

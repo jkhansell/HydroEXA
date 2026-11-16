@@ -16,17 +16,24 @@ BUILDDIR   := _build
 DOXYFILE   := doxygen/Doxyfile
 
 DOXYGEN    ?= doxygen
-SPHINXBUILD ?= uv run sphinx-build
+# The Sphinx environment is docs/pyproject.toml -- a uv project of its own,
+# outside the repository workspace, so it holds the Sphinx stack and the three
+# libraries autodoc imports, and nothing else.  `--locked` fails when the lock
+# does not match pyproject.toml instead of silently resolving something else.
+SPHINXBUILD ?= uv run --locked sphinx-build
 # The doc-comment pass is complete, so warnings are now failures: an
 # undocumented C++ entity stops Doxygen (WARN_AS_ERROR in the Doxyfile) and a
 # warning from Sphinx stops this build.  `--keep-going` keeps reporting the
 # rest of the tree instead of stopping at the first one.
 SPHINXOPTS ?= -W --keep-going
 
-.PHONY: help doxygen html strict linkcheck clean
+.PHONY: help sync doxygen html strict linkcheck clean
 
 help:
-	@echo "targets: doxygen | html | strict | linkcheck | clean"
+	@echo "targets: sync | doxygen | html | strict | linkcheck | clean"
+
+sync:
+	uv sync --locked
 
 doxygen:
 	@command -v $(DOXYGEN) >/dev/null 2>&1 || { \

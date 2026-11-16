@@ -823,6 +823,9 @@ node_modules/
 *.gen
 *.cache
 *.lock
+# ... except the uv locks: `uv sync --locked` in CI fails without them
+# (the repository root one is tracked already; docs/ has its own project).
+!docs/uv.lock
 *.pid
 *.seed
 *.stamp
