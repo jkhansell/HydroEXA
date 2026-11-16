@@ -113,13 +113,15 @@ class TestPreprocessPipeline:
             "amr.terrain_ref_lev 0\n"
         )
 
-        # Create z (bathymetry) field as a simple NumPy array
-        z_data = np.full((32, 32), 5.0, dtype=np.float64)
+        # Create z (bathymetry) field as a simple NumPy array.  A .npy field is
+        # read on a unit grid (dx = dy = 1 m), so it has to be 320x320 to cover
+        # the 320 m domain below.
+        z_data = np.full((320, 320), 5.0, dtype=np.float64)
         z_file = tmp_path / "z.npy"
         np.save(z_file, z_data)
 
         # Create h (water depth) field
-        h_data = np.full((32, 32), 2.0, dtype=np.float64)
+        h_data = np.full((320, 320), 2.0, dtype=np.float64)
         h_file = tmp_path / "h.npy"
         np.save(h_file, h_data)
 
@@ -140,19 +142,19 @@ class TestPreprocessPipeline:
         with h5py.File(output, "r") as f:
             assert "terrain" in f
             assert "fluid" in f
-            # Shape: (ny, nx * ncomp) = (32, 32 * 2) for terrain
-            assert f["terrain"].shape == (32, 64)
-            assert f["fluid"].shape == (32, 96)
+            # Shape: (ncomp, ny, nx) -- the component is the leading axis
+            assert f["terrain"].shape == (2, 32, 32)
+            assert f["fluid"].shape == (3, 32, 32)
             # Check attributes
             assert float(f["terrain"].attrs["dx"]) == 10.0
             assert float(f["terrain"].attrs["x_ll"]) == 0.0
             assert float(f["fluid"].attrs["dy"]) == 10.0
             assert float(f["fluid"].attrs["y_ll"]) == 0.0
-            # Check z component (component 0)
-            z_comp = f["terrain"][:, 0]
+            # Check z component
+            z_comp = f["terrain"][0]
             assert np.allclose(z_comp, 5.0)
-            # Check h component (component 0 of fluid)
-            h_comp = f["fluid"][:, 0]
+            # Check h component of fluid
+            h_comp = f["fluid"][0]
             assert np.allclose(h_comp, 2.0)
 
     def test_eta_z_pipeline(
@@ -164,11 +166,11 @@ class TestPreprocessPipeline:
         inp = tmp_path / "inputs"
         inp.write_text("amr.blocking_factor 16\n")
 
-        z_data = np.full((32, 32), 0.0, dtype=np.float64)
+        z_data = np.full((320, 320), 0.0, dtype=np.float64)
         z_file = tmp_path / "z.npy"
         np.save(z_file, z_data)
 
-        eta_data = np.full((32, 32), 5.0, dtype=np.float64)
+        eta_data = np.full((320, 320), 5.0, dtype=np.float64)
         eta_file = tmp_path / "eta.npy"
         np.save(eta_file, eta_data)
 
@@ -183,7 +185,7 @@ class TestPreprocessPipeline:
 
         with h5py.File(output, "r") as f:
             # h = eta - z = 5.0 - 0.0 = 5.0
-            h_comp = f["fluid"][:, 0]
+            h_comp = f["fluid"][0]
             assert np.allclose(h_comp, 5.0)
 
     def test_missing_required_field_raises(

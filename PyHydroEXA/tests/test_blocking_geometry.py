@@ -49,7 +49,9 @@ class TestComputeGridSize:
 
     def test_rounds_up(self) -> None:
         size = compute_grid_size(165.0, 10.0, 16)
-        assert size == 176  # round to 16.5 → 17 cells → round up to 112...
+        # 16.5 cells needs 17 whole cells, rounded up to the next multiple
+        # of the blocking factor: 32.
+        assert size == 32
 
     def test_small_domain(self) -> None:
         size = compute_grid_size(5.0, 10.0, 16)
@@ -65,10 +67,7 @@ class TestAdjustDomainForBlocking:
 
     def test_expands_hi(self) -> None:
         result = adjust_domain_for_blocking(0, 0, 165, 165, 10, 16)
-        # 16.5 cells → 17 cells → round up to 112...
-        # Actually: round(165/10) = 17, ceil(17/16)*16 = 32
-        # Wait: ((17 + 15) // 16) * 16 = (32 // 16) * 16 = 2 * 16 = 32
-        # So x_hi = 0 + 32 * 10 = 320
+        # 16.5 cells → 17 whole cells → next multiple of 16 is 32 → 320 m.
         assert result[2] == 320
         assert result[3] == 320
 
@@ -104,7 +103,7 @@ class TestGridResolution:
         assert r.x_size == 1600.0
 
     def test_square_cell_violation(self) -> None:
-        with pytest.raises(ValueError, match="square-cell"):
+        with pytest.raises(ValueError, match="(?i)square-cell"):
             GridResolution(
                 nx=160, ny=160, dx=10.0, dy=11.0,
                 refinement_scale=1, blocking_factor=16,

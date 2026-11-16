@@ -26,17 +26,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .config import PreprocessConfig, validate_config
 from .fields import SpatialField, read_field
 from .geometry import GridResolution, compute_resolution
 from .hdf5 import (
+    FLUID_NCOMP,
+    TERRAIN_NCOMP,
     assemble_fluid,
     assemble_terrain,
     assemble_from_water_level,
     write_hdf5,
 )
 from .input import parse_input_file
-from .resampling import combine_resampled_fields, resample_fields_to_grid
+from .resampling import resample_fields_to_grid
 
 
 def preprocess(
@@ -182,10 +186,8 @@ def preprocess(
     all_fields = list(spatial_fields.values())
     resampled = resample_fields_to_grid(all_fields, resolution, x_ll, y_ll)
 
-    # Combine into a single array per field (in case multiple sources overlap)
-    combined_data = combine_resampled_fields(resampled)
-
-    # Reconstruct SpatialFields on the target grid
+    # Reconstruct SpatialFields on the target grid.  `spatial_fields` is keyed
+    # by name, so each name has exactly one source and one resampled result.
     target_fields: dict[str, SpatialField] = {}
     for name, field in spatial_fields.items():
         # Find the resampled data for this field
@@ -237,7 +239,7 @@ def preprocess(
     else:
         # No terrain data — fill with NODATA
         ny, nx = resolution.ny, resolution.nx
-        terrain_arr = np.full((ny, nx * 2), -9999.0, dtype=np.float64)
+        terrain_arr = np.full((TERRAIN_NCOMP, ny, nx), -9999.0, dtype=np.float64)
 
     # Assemble fluid
     if has_h:
@@ -256,7 +258,7 @@ def preprocess(
     else:
         # No fluid data — fill with NODATA
         ny, nx = resolution.ny, resolution.nx
-        fluid_arr = np.full((ny, nx * 3), -9999.0, dtype=np.float64)
+        fluid_arr = np.full((FLUID_NCOMP, ny, nx), -9999.0, dtype=np.float64)
 
     # Step 8: Write HDF5
     if verbose:

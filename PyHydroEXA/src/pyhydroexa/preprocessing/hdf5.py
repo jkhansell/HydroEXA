@@ -1,13 +1,18 @@
 """HDF5 file writer.
 
 Writes terrain and fluid datasets in the exact schema expected by the
-HydroEXA C++ solver's :class:`IOHandler::ReadHDF5Hyperslab` methods.
+HydroEXA C++ solver's :class:`IOHandler::ReadHDF5HyperslabComponents`:
 
-Schema:
-    - Dataset "terrain": 2 components (z, roughness), shape (ny, nx)
-    - Dataset "fluid": 3 components (h, hu, hv), shape (ny, nx)
+    - Dataset "terrain": 3-D, shape (2, ny, nx) -- (z, roughness)
+    - Dataset "fluid": 3-D, shape (3, ny, nx) -- (h, hu, hv)
     - Attributes per dataset: "dx", "dy", "x_ll", "y_ll"
     - NODATA sentinel: -9999.0
+
+The component is the *leading* axis, which is what the C++ reader assumes
+(``HDF5Reader::Dataset`` takes the last two dimensions as spatial) and what
+every ``tests/*/*.h5`` in this repository contains.  A 2-D single-component
+dataset is also readable, but a multi-component one must not be flattened
+along x: the solver would read a component boundary as a spatial boundary.
 """
 
 from __future__ import annotations
@@ -59,11 +64,9 @@ def write_hdf5(
 
     Args:
         output_path: Path for the output HDF5 file.
-        terrain_data: 2D terrain array, shape (ny, nx), 2 components
-            stacked as (ny, nx*2) — i.e. z and roughness interleaved
-            or stored as separate component slices.
-        fluid_data: 2D fluid array, shape (ny, nx), 3 components
-            stored as (ny, nx*3).
+        terrain_data: Terrain array of shape (2, ny, nx): component 0 is
+            z (bed elevation), component 1 is Manning's roughness.
+        fluid_data: Fluid array of shape (3, ny, nx): (h, hu, hv).
         dx: Cell width.
         dy: Cell height.
         x_ll: Physical x-coordinate of lower-left corner.
@@ -79,30 +82,21 @@ def write_hdf5(
 
     output_path = Path(output_path)
 
-    # Validate dimensions
-    if terrain_data.ndim != 2:
-        raise ValueError(f"terrain_data must be 2D, got {terrain_data.ndim}D")
-    if fluid_data.ndim != 2:
-        raise ValueError(f"fluid_data must be 2D, got {fluid_data.ndim}D")
-
-    ny_T, nx_T_comp = terrain_data.shape
-    ny_F, nx_F_comp = fluid_data.shape
-
-    # C++ reads terrain as (ny, nx * ncomp)
-    # So nx_T_comp should be nx * TERRAIN_NCOMP
-    if nx_T_comp % TERRAIN_NCOMP != 0:
+    # Validate dimensions: the component axis is the leading one, because
+    # that is the axis the C++ reader treats as non-spatial.
+    if terrain_data.ndim != 3 or terrain_data.shape[0] != TERRAIN_NCOMP:
         raise ValueError(
-            f"terrain_data component dimension ({nx_T_comp}) is not "
-            f"divisible by TERRAIN_NCOMP ({TERRAIN_NCOMP})"
+            f"terrain_data must have shape ({TERRAIN_NCOMP}, ny, nx), "
+            f"got {terrain_data.shape}"
         )
-    if nx_F_comp % FLUID_NCOMP != 0:
+    if fluid_data.ndim != 3 or fluid_data.shape[0] != FLUID_NCOMP:
         raise ValueError(
-            f"fluid_data component dimension ({nx_F_comp}) is not "
-            f"divisible by FLUID_NCOMP ({FLUID_NCOMP})"
+            f"fluid_data must have shape ({FLUID_NCOMP}, ny, nx), "
+            f"got {fluid_data.shape}"
         )
 
-    nx_T = nx_T_comp // TERRAIN_NCOMP
-    nx_F = nx_F_comp // FLUID_NCOMP
+    ny_T, nx_T = terrain_data.shape[1:]
+    ny_F, nx_F = fluid_data.shape[1:]
 
     if ny_T != ny_F or nx_T != nx_F:
         raise ValueError(
@@ -153,9 +147,9 @@ def assemble_terrain(
 ) -> npt.NDArray[np.float64]:
     """Assemble the terrain dataset array from source fields.
 
-    The terrain dataset has 2 components stored as (ny, nx * 2):
-        component 0: z (bathymetry / bed elevation)
-        component 1: roughness (Manning's n)
+    The terrain dataset is 3-D with the component on the leading axis:
+        terrain[0] -- z (bathymetry / bed elevation)
+        terrain[1] -- roughness (Manning's n)
 
     Args:
         z_field: Bathymetry field.
@@ -164,25 +158,26 @@ def assemble_terrain(
         default_roughness: Default Manning's n value.
 
     Returns:
-        Terrain array of shape (ny, nx * 2).
+        Terrain array of shape (2, ny, nx).
     """
     ny = z_field.ny
     nx = z_field.nx
     nodata = z_field.nodata
 
-    terrain = np.full((ny, nx * TERRAIN_NCOMP), nodata, dtype=np.float64)
+    terrain = np.full((TERRAIN_NCOMP, ny, nx), nodata, dtype=np.float64)
 
-    # Component 0: z
+    # Component 0: z.  Masked so that a NODATA cell stays NODATA in every
+    # component; otherwise the sentinel would be overwritten with a real bed
+    # elevation of -9999 and the solver could not tell the two apart.
     z_mask = z_field.is_valid
-    terrain[z_mask, 0] = z_field.data[z_mask]
+    terrain[0][z_mask] = z_field.data[z_mask]
 
     # Component 1: roughness
     if roughness_field is not None:
         r_mask = roughness_field.is_valid
-        terrain[r_mask, 1] = roughness_field.data[r_mask]
+        terrain[1][r_mask] = roughness_field.data[r_mask]
     else:
-        # Fill with default where z is valid
-        terrain[z_field.is_valid, 1] = default_roughness
+        terrain[1][z_mask] = default_roughness
 
     return terrain
 
@@ -196,10 +191,10 @@ def assemble_fluid(
 ) -> npt.NDArray[np.float64]:
     """Assemble the fluid dataset array from source fields.
 
-    The fluid dataset has 3 components stored as (ny, nx * 3):
-        component 0: h (water depth, h = eta - z)
-        component 1: hu (x-momentum)
-        component 2: hv (y-momentum)
+    The fluid dataset is 3-D with the component on the leading axis:
+        fluid[0] -- h (water depth, h = eta - z)
+        fluid[1] -- hu (x-momentum)
+        fluid[2] -- hv (y-momentum)
 
     Args:
         h_field: Water depth field.
@@ -209,31 +204,31 @@ def assemble_fluid(
         default_hv: Default y-momentum value.
 
     Returns:
-        Fluid array of shape (ny, nx * 3).
+        Fluid array of shape (3, ny, nx).
     """
     ny = h_field.ny
     nx = h_field.nx
     nodata = h_field.nodata
 
-    fluid = np.full((ny, nx * FLUID_NCOMP), nodata, dtype=np.float64)
+    fluid = np.full((FLUID_NCOMP, ny, nx), nodata, dtype=np.float64)
 
     # Component 0: h
     h_mask = h_field.is_valid
-    fluid[h_mask, 0] = h_field.data[h_mask]
+    fluid[0][h_mask] = h_field.data[h_mask]
 
     # Component 1: hu
     if hu_field is not None:
         hu_mask = hu_field.is_valid
-        fluid[hu_mask, 1] = hu_field.data[hu_mask]
+        fluid[1][hu_mask] = hu_field.data[hu_mask]
     else:
-        fluid[h_field.is_valid, 1] = default_hu
+        fluid[1][h_mask] = default_hu
 
     # Component 2: hv
     if hv_field is not None:
         hv_mask = hv_field.is_valid
-        fluid[hv_mask, 2] = hv_field.data[hv_mask]
+        fluid[2][hv_mask] = hv_field.data[hv_mask]
     else:
-        fluid[h_field.is_valid, 2] = default_hv
+        fluid[2][h_mask] = default_hv
 
     return fluid
 

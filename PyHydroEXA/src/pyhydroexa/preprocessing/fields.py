@@ -111,17 +111,22 @@ class SpatialField:
         Returns:
             A new :class:`SpatialField` clipped to the domain.
         """
-        # Convert physical coordinates to array indices
+        # Convert physical coordinates to array indices.  The upper bound is
+        # exclusive, matching x_ur == x_ll + nx*dx: clipping a 100-cell field
+        # to [25, 75) is 50 cells, not 51.
         col_lo = max(0, int((x_lo - self.x_ll) / self.dx))
         row_lo = max(0, int((y_lo - self.y_ll) / self.dy))
-        col_hi = min(self.nx, int((x_hi - self.x_ll) / self.dx) + 1)
-        row_hi = min(self.ny, int((y_hi - self.y_ll) / self.dy) + 1)
+        col_hi = min(self.nx, int((x_hi - self.x_ll) / self.dx))
+        row_hi = min(self.ny, int((y_hi - self.y_ll) / self.dy))
 
         clipped_data = self.data[row_lo:row_hi, col_lo:col_hi].copy()
 
         new_x_ll = self.x_ll + col_lo * self.dx
         new_y_ll = self.y_ll + row_lo * self.dy
 
+        # The name is deliberately unchanged: callers track a field across
+        # clip/resample by name, and decorating it with the clip window made
+        # the field unmatchable and silently dropped it downstream.
         return SpatialField(
             data=clipped_data,
             x_ll=new_x_ll,
@@ -129,7 +134,7 @@ class SpatialField:
             dx=self.dx,
             dy=self.dy,
             nodata=self.nodata,
-            name=f"{self.name}[{x_lo}:{x_hi},{y_lo}:{y_hi}]",
+            name=self.name,
             crs=self.crs,
         )
 

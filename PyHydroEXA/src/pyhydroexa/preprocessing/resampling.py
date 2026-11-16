@@ -7,6 +7,7 @@ physical (x, y) coordinates, not array indices.
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 
@@ -15,7 +16,7 @@ import numpy.typing as npt
 from scipy import ndimage
 
 from .fields import SpatialField
-from .geometry import GridResolution
+from .geometry import CELL_EPS, GridResolution
 
 
 @dataclass(frozen=True)
@@ -85,29 +86,37 @@ def resample_to_grid(
             f"Target: [{x_ll_target}, {x_hi_target}] x [{y_ll_target}, {y_hi_target}]."
         )
 
-    # Compute target array for this source
-    # Target cells that overlap with the source
+    # Target cells that overlap with the source.  The lower bound is the cell
+    # containing the overlap start; the upper bound is a ceiling, so a cell the
+    # overlap only partly covers is still included.  The epsilon keeps an
+    # overlap that ends exactly on a cell boundary from claiming the next cell.
     col_lo = max(0, int((x_lo_overlap - x_ll_target) / target.dx))
     row_lo = max(0, int((y_lo_overlap - y_ll_target) / target.dy))
-    col_hi = min(target.nx, int((x_hi_overlap - x_ll_target) / target.dx) + 1)
-    row_hi = min(target.ny, int((y_hi_overlap - y_ll_target) / target.dy) + 1)
+    col_hi = min(
+        target.nx,
+        max(col_lo, math.ceil((x_hi_overlap - x_ll_target) / target.dx - CELL_EPS)),
+    )
+    row_hi = min(
+        target.ny,
+        max(row_lo, math.ceil((y_hi_overlap - y_ll_target) / target.dy - CELL_EPS)),
+    )
 
-    target_nx_sub = col_hi - col_lo
-    target_ny_sub = row_hi - row_lo
-
-    # Initialize output with NODATA
+    # The result is a full target-grid array: a source that covers only part of
+    # the domain must still produce a field that can be dropped onto that grid
+    # without knowing where it came from.  Cells outside the source stay NODATA.
     nodata = source.nodata
-    out_data = np.full((target_ny_sub, target_nx_sub), nodata, dtype=np.float64)
+    out_data = np.full((target.ny, target.nx), nodata, dtype=np.float64)
 
-    # Map source cells to target cells
-    # For each target cell in the overlap, find the corresponding source cell
-    for row in range(target_ny_sub):
+    # Map source cells to target cells, sampling at the target cell's lower-left
+    # corner so that a cell's value is the source value that physically contains
+    # that point.
+    for row in range(row_hi - row_lo):
         y_phys = y_ll_target + (row_lo + row) * target.dy
         # Source row index for this physical y
         src_row = int((y_phys - source.y_ll) / source.dy)
         src_row = max(0, min(source.ny - 1, src_row))
 
-        for col in range(target_nx_sub):
+        for col in range(col_hi - col_lo):
             x_phys = x_ll_target + (col_lo + col) * target.dx
             # Source col index for this physical x
             src_col = int((x_phys - source.x_ll) / source.dx)
@@ -115,7 +124,7 @@ def resample_to_grid(
 
             val = source.data[src_row, src_col]
             if val != nodata:
-                out_data[row, col] = val
+                out_data[row_lo + row, col_lo + col] = val
 
     return ResampledField(
         data=out_data,
@@ -132,9 +141,11 @@ def resample_fields_to_grid(
 ) -> list[ResampledField]:
     """Resample multiple fields onto the target grid.
 
-    Fields are resampled independently and then combined. If multiple
-    fields cover the same target cell, the last field in the list takes
-    precedence for that cell.
+    Each field is resampled independently and returned as its own
+    :class:`ResampledField` on the full target grid, so a caller that knows
+    which field is which keeps that knowledge.  Overlaying several results is a
+    separate step (:func:`combine_resampled_fields`), which is first-wins:
+    a later field only fills cells the earlier ones left as NODATA.
 
     Args:
         fields: List of source fields.
@@ -177,6 +188,7 @@ def combine_resampled_fields(
     # All fields should have the same shape
     shape = resampled[0].data.shape
     combined = np.full(shape, nodata, dtype=np.float64)
+    filled = np.zeros(shape, dtype=bool)
 
     for field in resampled:
         if field.data.shape != shape:
@@ -186,7 +198,10 @@ def combine_resampled_fields(
                 stacklevel=2,
             )
             continue
-        mask = field.data != nodata
+        # `filled` is what makes this first-wins rather than last-wins: a
+        # later field may only contribute where nothing has contributed yet.
+        mask = (field.data != nodata) & ~filled
         combined[mask] = field.data[mask]
+        filled |= mask
 
     return combined

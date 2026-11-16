@@ -7,9 +7,10 @@ computing valid grid sizes and adjusting domains to satisfy the constraint.
 
 from __future__ import annotations
 
+import math
 from math import gcd
 
-from .geometry import GridResolution
+from .geometry import CELL_EPS, GridResolution
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +80,11 @@ def compute_grid_size(
     Returns:
         Grid size (number of cells) that is a multiple of blocking_factor.
     """
-    raw_size = round(physical_size / cell_size)
+    # A partial cell needs a whole cell: 16.5 cells of extent is 17 cells, then
+    # rounded up to the next blocking multiple.  round() would silently give 16
+    # here (Python rounds half to even), which under-covers the domain; the
+    # epsilon keeps an exact 16.0000000001 from becoming 17.
+    raw_size = math.ceil(physical_size / cell_size - CELL_EPS)
     if raw_size <= 0:
         raw_size = blocking_factor
     # Round up to next multiple of blocking_factor
@@ -123,11 +128,10 @@ def adjust_domain_for_blocking(
     Returns:
         Adjusted (x_lo, y_lo, x_hi, y_hi).
     """
-    nx = round((x_hi - x_lo) / cell_size)
-    ny = round((y_hi - y_lo) / cell_size)
-
-    adj_nx = ((nx + blocking_factor - 1) // blocking_factor) * blocking_factor
-    adj_ny = ((ny + blocking_factor - 1) // blocking_factor) * blocking_factor
+    # Delegate the cell count to compute_grid_size so that the ceiling and the
+    # blocking round-up cannot drift apart from the rest of the pipeline.
+    adj_nx = compute_grid_size(x_hi - x_lo, cell_size, blocking_factor)
+    adj_ny = compute_grid_size(y_hi - y_lo, cell_size, blocking_factor)
 
     adj_x_hi = x_lo + adj_nx * cell_size
     adj_y_hi = y_lo + adj_ny * cell_size

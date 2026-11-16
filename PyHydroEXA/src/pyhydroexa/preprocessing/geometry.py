@@ -6,9 +6,16 @@ the square-cell invariant (dx == dy) and AMReX blocking factor constraints.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .config import PreprocessConfig
+
+# Tolerance used when converting a physical extent to a cell count.  Extents
+# like 16.0000000001 cells are an exact 16 with floating-point noise, and must
+# not be rounded up to 17 (which would round up again to the next blocking
+# multiple and inflate the grid by a whole block).
+CELL_EPS = 1e-9
 
 
 @dataclass(frozen=True)
@@ -115,9 +122,11 @@ def compute_resolution(
             f"Domain extent must be positive: x_size={x_size}, y_size={y_size}"
         )
 
-    # Compute raw resolution
-    raw_nx = round(x_size / cell_size)
-    raw_ny = round(y_size / cell_size)
+    # Compute raw resolution.  A partial cell needs a whole cell, so this is a
+    # ceiling, not a round: 16.5 cells of domain must be covered by 17.  The
+    # epsilon keeps floating-point noise from turning an exact 16.0 into 17.
+    raw_nx = math.ceil(x_size / cell_size - CELL_EPS)
+    raw_ny = math.ceil(y_size / cell_size - CELL_EPS)
 
     if raw_nx <= 0 or raw_ny <= 0:
         raise ValueError(
@@ -193,8 +202,12 @@ def _read_hdf5_domain(path: str) -> tuple[float, float, float, float] | None:
                 dy = float(terrain.attrs.get("dy", dx))
                 x_ll = float(terrain.attrs.get("x_ll", 0))
                 y_ll = float(terrain.attrs.get("y_ll", 0))
-                nx = terrain.shape[1]
-                ny = terrain.shape[0]
+                # Multi-component datasets are (ncomp, ny, nx); a single
+                # component may be stored as plain (ny, nx).
+                if terrain.ndim == 3:
+                    ny, nx = terrain.shape[1], terrain.shape[2]
+                else:
+                    ny, nx = terrain.shape[0], terrain.shape[1]
                 return (x_ll, y_ll, x_ll + nx * dx, y_ll + ny * dy)
     except (KeyError, ValueError, OSError):
         pass
