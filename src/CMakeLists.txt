@@ -105,6 +105,37 @@ if(DEFINED HDF5_ROOT)
 endif()
 find_package(HDF5 REQUIRED COMPONENTS C)
 
+# --- Filter libraries -------------------------------------------------------
+# HDF5's deflate filter calls zlib, but find_package(HDF5) reports only the
+# HDF5 libraries themselves: the autotools wrapper used to leak `-lz` through
+# `h5cc -show`, and the CMake build's wrapper emits only -I/-L. So ask the HDF5
+# build itself — the generated H5pubconf.h says which filters are compiled in —
+# and link what the filter needs. Without this the link fails on inflateInit_,
+# compress2, etc.
+set(_hdf5_filter_libs "")
+set(_hdf5_pubconf "")
+foreach(_hdf5_inc IN LISTS HDF5_INCLUDE_DIRS HDF5_C_INCLUDE_DIR HDF5_INCLUDE_DIR)
+    if(EXISTS "${_hdf5_inc}/H5pubconf.h")
+        set(_hdf5_pubconf "${_hdf5_inc}/H5pubconf.h")
+        break()
+    endif()
+endforeach()
+
+if(_hdf5_pubconf)
+    file(STRINGS "${_hdf5_pubconf}" _hdf5_deflate
+        REGEX "^#define H5_HAVE_FILTER_DEFLATE 1")
+    if(_hdf5_deflate)
+        find_package(ZLIB REQUIRED)
+        list(APPEND _hdf5_filter_libs ZLIB::ZLIB)
+        message(STATUS "HDF5 deflate filter enabled: linking zlib")
+    endif()
+else()
+    message(WARNING
+        "H5pubconf.h not found under the HDF5 include directories; assuming "
+        "HDF5 was built without external filters. If the link fails on "
+        "inflateInit_/compress2, link zlib explicitly.")
+endif()
+
 # -----------------------------------------------------------------------------
 # Sources
 # -----------------------------------------------------------------------------
@@ -134,6 +165,7 @@ target_include_directories(HydroEXA PUBLIC
 target_link_libraries(HydroEXA PUBLIC
     AMReX::amrex
     ${HDF5_LIBRARIES}
+    ${_hdf5_filter_libs}
     MPI::MPI_CXX
     MPI::MPI_C
 )
