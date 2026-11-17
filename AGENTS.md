@@ -126,9 +126,22 @@ cmake --install build-hydroexa
   config are found consistently.
 - `local.cpu` / `local.gpu` use `mpicc`/`mpicxx` deliberately, to match the MPI variant
   that conda HDF5 links against (avoids `ompi_mpi_errors_throw_exceptions` symbol errors).
-- Do **NOT** set `LANGUAGE CUDA` on HydroEXA C++ sources: nvcc's C++ parser rejects C++20
-  features used by AMReX headers (`std::numbers::pi_v`, `std::ssize`). Sources compile with
-  `mpicxx`; AMReX compiles its own CUDA.
+- **`LANGUAGE CUDA` on the solver's `.cpp` files is required, and
+  `CUDA_SEPARABLE_COMPILATION` with it.** With `AMREX_USE_GPU`,
+  `AMReX_GpuQualifiers.H` maps `AMREX_GPU_HOST`/`AMREX_GPU_DEVICE` to
+  `__host__`/`__device__` and includes `<hip/hip_runtime.h>` for HIP but nothing for
+  CUDA, so a host compiler cannot parse the installed AMReX headers: building these
+  sources with `mpicxx` stops at `AMReX.H:138: error: '__host__' does not name a type`.
+  And because AMReX itself is built with `AMReX_GPU_RDC=ON` (its default), dropping
+  separable compilation fails to link on `__cudaRegisterLinkedBinary_*` from
+  `libamrex_2d.a`. Both measured on `nukwa-03` with CUDA 12.4 (2026-11-17). The older
+  claim that nvcc rejects C++20 features (`std::numbers::pi_v`, `std::ssize`) is **not**
+  reproducible — nvcc 12.4 compiles them fine.
+- Consequence: every solver translation unit carries a relocatable device image, and
+  the binary is ~164 MB (142 MB of CUDA fatbins). `-Xfatbin=-compress-all` changes
+  nothing; shrinking it means rebuilding AMReX with `-DAMReX_GPU_RDC=OFF` (AMReX also
+  hard-codes `--generate-line-info` into its exported CUDA options). See
+  `docs/building.md`.
 - `Debug` builds are recommended for development (usable backtraces); `Release` for production.
 
 ## Machine Targets

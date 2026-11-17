@@ -234,6 +234,8 @@ truth as the presets:
 | `Inherited preset is unreachable from preset's file` | a card file inherits a fragment it does not itself `include` | each card file includes `00-backends.json`, `01-precision.json`, `02-buildtype.json` |
 | `FATAL_ERROR` telling you to pick a leaf | you selected a fragment (`backend-cuda`, `precision-double`, …) | select a leaf, e.g. `kabreV100-gpu-double` |
 | `undefined reference to 'inflateInit_'`, `compress2` | HDF5 was built with the deflate filter, but `find_package(HDF5)` reports only the HDF5 libraries | handled in `src/CMakeLists.txt`: `H5_HAVE_FILTER_DEFLATE` in `H5pubconf.h` triggers a `ZLIB::ZLIB` link |
+| `AMReX.H:138: error: '__host__' does not name a type` | the source is being compiled by the host compiler, but AMReX was built with `AMREX_USE_GPU` | keep `LANGUAGE CUDA` on that source; only `nvcc` can parse those headers |
+| `undefined reference to '__cudaRegisterLinkedBinary_…'` | `CUDA_SEPARABLE_COMPILATION` was turned off, but AMReX is built with `AMReX_GPU_RDC=ON` | keep it on, or rebuild AMReX with `-DAMReX_GPU_RDC=OFF` |
 | `version 'GLIBCXX_3.4.32' not found` when running the binary | you ran it outside the machine environment | run it through `./scripts/with-machine <machine> -- …` |
 | `find_package(AMReX)` demands a newer CMake than you have | `AMReXConfig.cmake` embeds the `cmake_minimum_required` of the CMake that built AMReX | build AMReX with the CMake you intend to use; the superbuild does this for you |
 | the binary is ~164 MB | CUDA device images: `__nv_relfatbin` + `.nv_fatbin` dominate | expected; see [Binary size](#binary-size) |
@@ -247,6 +249,19 @@ about 2 MB. The cause is `LANGUAGE CUDA` on the solver's `.cpp` files combined
 with `CUDA_SEPARABLE_COMPILATION`, which keeps a relocatable device image per
 translation unit *and* the device-linked copy. This is unchanged from the
 pre-superbuild binary (164,168,816 B), so it is not a build-system regression.
+
+Neither half can be dropped as things stand — both were measured on `nukwa-03`
+(CUDA 12.4, 2026-11-17):
+
+| Attempt | Result |
+|---|---|
+| compile the `.cpp` files with `mpicxx` (no `LANGUAGE CUDA`) | `AMReX.H:138: error: '__host__' does not name a type` — AMReX's headers map `AMREX_GPU_HOST` to `__host__` whenever `AMREX_USE_GPU`, and include no CUDA header for a host compiler |
+| keep `LANGUAGE CUDA`, drop `CUDA_SEPARABLE_COMPILATION` | link fails on `__cudaRegisterLinkedBinary_*` from `libamrex_2d.a`, which is itself built with `AMReX_GPU_RDC=ON` (AMReX's default) |
+| add `-Xfatbin=-compress-all` | byte-identical binary (164,164,464 B); AMReX hard-codes `--generate-line-info` into its exported CUDA options, and that is what fills the fatbins |
+
+So the size is a property of the dependency build, not of this project's
+`CMakeLists.txt`. Shrinking it means rebuilding AMReX with `-DAMReX_GPU_RDC=OFF`
+first — untested here, and a dependency decision rather than a solver one.
 
 ## What "it builds" means here
 
