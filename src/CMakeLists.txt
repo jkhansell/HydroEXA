@@ -186,10 +186,14 @@ target_compile_definitions(HydroEXA PRIVATE
     HYDROEXA_BUILD_MACHINE="${HYDROEXA_MACHINE}"
 )
 
-# NOTE: device compilation of .cpp sources is preserved exactly as before.
-# AGENTS.md claims nvcc cannot parse the C++20 features used by AMReX headers,
-# yet every src/*/CMakeLists.txt does this and the builds work. Unresolved;
-# deliberately not changed here.
+# Device compilation of the solver's .cpp sources is required, not incidental:
+# with AMREX_USE_GPU, AMReX's installed headers map AMREX_GPU_HOST/DEVICE to
+# __host__/__device__ and include no CUDA header for a host compiler, so mpicxx
+# stops at "AMReX.H:138: error: '__host__' does not name a type". Separable
+# compilation is required with it, because AMReX itself is built with
+# AMReX_GPU_RDC=ON and its objects need a device link. (The older claim that
+# nvcc rejects C++20 features used by AMReX headers is not reproducible with
+# CUDA 12.4; see docs/building.md, "Binary size".)
 if(AMReX_GPU_BACKEND STREQUAL "CUDA")
     set_source_files_properties(HydroEXA.cpp HydroEXADriver.cpp PROPERTIES LANGUAGE CUDA)
     set_target_properties(HydroEXA PROPERTIES
