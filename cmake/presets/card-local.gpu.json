@@ -1,0 +1,44 @@
+{
+  "version": 6,
+  "include": [
+    "00-backends.json",
+    "01-precision.json",
+    "02-buildtype.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "card-local.gpu",
+      "displayName": "Local GPU - native arch (fragment)",
+      "description": "Card fragment: CUDA compiled for the GPU present at build time (native).",
+      "inherits": "backend-cuda",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_MACHINE": "local.gpu",
+        "HYDROEXA_GPU_ARCH": "native"
+      }
+    },
+    {
+      "name": "local-gpu-double",
+      "displayName": "Local GPU / DOUBLE",
+      "inherits": ["card-local.gpu", "precision-double", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    },
+    {
+      "name": "local-gpu-single",
+      "displayName": "Local GPU / SINGLE",
+      "inherits": ["card-local.gpu", "precision-single", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    }
+  ]
+}

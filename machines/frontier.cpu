@@ -1,21 +1,23 @@
 #!/bin/bash
+# OLCF Frontier — CPU nodes, Cray PrgEnv (no GPU offload)
+#
+# Toolchain only. Build options come from the CMake presets; see
+# cmake/presets/card-frontier.cpu.json.
 
-module load PrgEnv-cray
-module load cpe/26.03
-module load amd/7.0.2
-module load rocm/7.0.2
-module load craype-accel-amd-gfx90a
-module load craype-x86-trento
-module load cray-mpich/9.1.0
-module load hdf5/1.14.6-mpi
+if [ -z "${HYDROEXA_NO_MODULES:-}" ]; then
+    module load PrgEnv-cray
+    module load cpe/26.03
+    module load craype-x86-trento
+    module load cray-mpich/9.1.0
+    module load hdf5/1.14.6-mpi
+fi
 
-export LD_LIBRARY_PATH=${CRAY_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}
-export OMP_PROC_BIND=spread 
+export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}"
+export OMP_PROC_BIND=spread
 export OMP_PLACES=threads
-export HSA_XNACK=1
-export MPICH_GPU_SUPPORT_ENABLED=1
 
-export CC=cc
-export CXX=CC
-export FC=ftn
-export GPU_FLAGS="-DAMReX_GPU_BACKEND=NONE"
+export CC="${CC:-cc}"
+export CXX="${CXX:-CC}"
+export FC="${FC:-ftn}"
+
+export HYDROEXA_GPU_BACKEND="NONE"

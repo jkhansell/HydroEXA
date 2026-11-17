@@ -1,0 +1,25 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "precision-double",
+      "displayName": "amrex::Real = double (fragment)",
+      "description": "AMReX and HydroEXA built with double precision.",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "AMReX_PRECISION": "DOUBLE"
+      }
+    },
+    {
+      "name": "precision-single",
+      "displayName": "amrex::Real = float (fragment)",
+      "description": "AMReX and HydroEXA built with single precision.",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "AMReX_PRECISION": "SINGLE"
+      }
+    }
+  ]
+}
