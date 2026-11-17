@@ -37,13 +37,22 @@ export PRECISION
 resolve_paths "${TARGET}"
 
 # --- Source machine-specific module loads ---
+# A missing profile is a hard error: continuing without one leaves CC/CXX and
+# the GPU flags unset, and the build fails much later with a confusing message.
 MACHINE_FILE="${HYDROEXA_DIR}/machines/${TARGET}"
-if [ -f "${MACHINE_FILE}" ]; then
-    print_banner "${BLUE}" "Sourcing machine config: ${MACHINE_FILE}"
-    source "${MACHINE_FILE}"
-else
+if [ ! -f "${MACHINE_FILE}" ]; then
     print_banner "${RED}" "No machine config found at ${MACHINE_FILE}"
+    echo "Available machine profiles:" >&2
+    ls -1 "${HYDROEXA_DIR}/machines" >&2
+    exit 1
 fi
+
+print_banner "${BLUE}" "Sourcing machine config: ${MACHINE_FILE}"
+source "${MACHINE_FILE}"
+
+# Profiles describe the card (HYDROEXA_GPU_BACKEND / _ARCH); the cmake argument
+# string is derived here so there is a single source of truth.
+hydroexa_derive_gpu_flags
 
 # --- Export install paths (inherited by all child scripts) ---
 # Everything for one machine lives under install_${TARGET}/:
@@ -86,8 +95,12 @@ print_banner "${BLUE}" "Configuring"
 
 rm -f "${HYDROEXA_BUILD}/CMakeCache.txt"
 
-cmake -S "${HYDROEXA_SRC}" -B "${HYDROEXA_BUILD}"                         \
-    -DHYDROEXA_GPU_BACKEND="${TARGET}"                                    \
+cmake -S "${HYDROEXA_SRC}/src" -B "${HYDROEXA_BUILD}"                     \
+    -DHYDROEXA_GPU_BACKEND="${HYDROEXA_GPU_BACKEND:-NONE}"                \
+    -DHYDROEXA_GPU_ARCH="${HYDROEXA_GPU_ARCH:-}"                          \
+    -DHYDROEXA_MPI_LINK_WORKAROUND="${HYDROEXA_MPI_LINK_WORKAROUND:-OFF}" \
+    -DHYDROEXA_PRESET="legacy-${TARGET}-${PRECISION}"                     \
+    -DHYDROEXA_MACHINE="${TARGET}"                                        \
     -DHDF5_ROOT="${HDF5_ROOT}"                                            \
     -DAMReX_ROOT="${AMREX_ROOT}"                                          \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"                                    \

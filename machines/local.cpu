@@ -1,8 +1,14 @@
 #!/bin/bash
+# Local CPU-only build (WSL2).
+#
+# Toolchain only. Build options come from the CMake presets; see
+# cmake/presets/card-local.cpu.json.
+#
+#   mamba run -n hydroexa_env bash scripts/with-machine local.cpu -- \
+#       cmake --preset local-cpu-double
 
-export CC=gcc
-export CXX=g++
-export FC=gfortran
-GPU_FLAGS="
-    -DAMReX_GPU_BACKEND=NONE
-"
+export CC="${CC:-gcc}"
+export CXX="${CXX:-g++}"
+export FC="${FC:-gfortran}"
+
+export HYDROEXA_GPU_BACKEND="NONE"

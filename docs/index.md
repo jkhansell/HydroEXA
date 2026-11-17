@@ -7,6 +7,13 @@ preprocessing and analysis.
 
 ```{toctree}
 :maxdepth: 2
+:caption: Building
+
+building
+```
+
+```{toctree}
+:maxdepth: 2
 :caption: Design notes
 
 PIPELINE

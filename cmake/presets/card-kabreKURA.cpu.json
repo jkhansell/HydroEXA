@@ -1,0 +1,44 @@
+{
+  "version": 6,
+  "include": [
+    "00-backends.json",
+    "01-precision.json",
+    "02-buildtype.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "card-kabreKURA.cpu",
+      "displayName": "Kabre KURA - CPU only (fragment)",
+      "description": "Card fragment: no GPU, MPICH 4.1.1, AMReX MPI link workaround.",
+      "inherits": "backend-cpu",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_MACHINE": "kabreKURA.cpu",
+        "HYDROEXA_MPI_LINK_WORKAROUND": "ON"
+      }
+    },
+    {
+      "name": "kabreKURA-cpu-double",
+      "displayName": "Kabre KURA / DOUBLE",
+      "inherits": ["card-kabreKURA.cpu", "precision-double", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    },
+    {
+      "name": "kabreKURA-cpu-single",
+      "displayName": "Kabre KURA / SINGLE",
+      "inherits": ["card-kabreKURA.cpu", "precision-single", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    }
+  ]
+}

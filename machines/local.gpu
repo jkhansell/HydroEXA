@@ -1,6 +1,15 @@
 #!/bin/bash
+# Local CUDA workstation (WSL2 / RTX-class GPU), built for the GPU present at
+# build time ("native" architecture).
+#
+# Toolchain only. Build options come from the CMake presets; see
+# cmake/presets/card-local.gpu.json.
+#
+# There is no module system locally: run inside the conda environment so the
+# MPI and HDF5 that CMake finds are the ones that will link together.
+#
+#   mamba run -n hydroexa_env bash scripts/with-machine local.gpu -- \
+#       cmake --preset local-gpu-double
 
-GPU_FLAGS="
-    -DCMAKE_CUDA_ARCHITECTURES=native
-    -DAMReX_GPU_BACKEND=CUDA
-"
+export HYDROEXA_GPU_BACKEND="CUDA"
+export HYDROEXA_GPU_ARCH="native"

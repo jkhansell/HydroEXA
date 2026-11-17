@@ -1,14 +1,28 @@
 #!/bin/bash
+# Kabre V100 (Volta, sm_70) — MPICH 4.1.1 + CUDA 12.4 + gcc 13.4
+#
+# Toolchain only. Build options (backend, architecture, precision, build type)
+# come from the CMake presets; see cmake/presets/card-kabreV100.gpu.json.
+#
+# Overrides are applied by scripts/with-machine before this file is sourced:
+#   CC / CXX / FC          alternative compiler wrappers
+#   HYDROEXA_NO_MODULES=1  keep the caller's environment (no module purge/load)
 
-module purge
-module load mpich/4.1.1
-module load cuda/12.4.0
-module load gcc/13.4.0
-module load szip/2.1
-module load hdf5/1.14.6-parallel-mpich-4.1.1
+if [ -z "${HYDROEXA_NO_MODULES:-}" ]; then
+    module purge
+    module load mpich/4.1.1
+    module load cuda/12.4.0
+    module load gcc/13.4.0
+    module load szip/2.1
+fi
 
-export CC=mpicc
-export CXX=mpicxx
-export FC=mpif90
+export CC="${CC:-mpicc}"
+export CXX="${CXX:-mpicxx}"
+export FC="${FC:-mpif90}"
 
-export GPU_FLAGS="-DCMAKE_CUDA_ARCHITECTURES=70 -DAMReX_GPU_BACKEND=CUDA"
+# Card description. The presets are authoritative for builds; these are kept so
+# the legacy scripts (scripts/lib.sh derives GPU_FLAGS from them) agree with the
+# presets until the legacy path is removed.
+export HYDROEXA_GPU_BACKEND="CUDA"
+export HYDROEXA_GPU_ARCH="70"
+export HYDROEXA_MPI_LINK_WORKAROUND="ON"

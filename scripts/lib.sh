@@ -62,6 +62,41 @@ trap cleanup_on_fail EXIT
 #                      it to CC / CXX / FC.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# hydroexa_derive_gpu_flags — turn the card description exported by a machine
+# profile into the -D argument string the legacy build scripts pass to cmake.
+#
+# Profiles declare *what the card is* (HYDROEXA_GPU_BACKEND / HYDROEXA_GPU_ARCH);
+# this is the single place that turns that into CMake arguments, so profiles
+# never hand-write cmake flags. Removed together with the legacy scripts.
+# ---------------------------------------------------------------------------
+hydroexa_derive_gpu_flags() {
+    local backend="${HYDROEXA_GPU_BACKEND:-NONE}"
+    local arch="${HYDROEXA_GPU_ARCH:-}"
+    local flags=""
+
+    case "${backend}" in
+        CUDA)
+            flags="-DAMReX_GPU_BACKEND=CUDA"
+            [ -n "${arch}" ] && flags="${flags} -DCMAKE_CUDA_ARCHITECTURES=${arch}"
+            ;;
+        HIP)
+            # AMReX requires AMReX_AMD_ARCH when the HIP backend is selected.
+            flags="-DAMReX_GPU_BACKEND=HIP"
+            [ -n "${arch}" ] && flags="${flags} -DAMReX_AMD_ARCH=${arch}"
+            ;;
+        NONE|"")
+            flags="-DAMReX_GPU_BACKEND=NONE"
+            ;;
+        *)
+            echo "error: unknown HYDROEXA_GPU_BACKEND '${backend}'" >&2
+            return 1
+            ;;
+    esac
+
+    export GPU_FLAGS="${flags}"
+}
+
 # --- Path resolution ---
 # Call resolve_paths <machine> once at the top of any build script.
 # Sets: HYDROEXA_DIR, AMREX_DIR, BUILD_ROOT, INSTALL_ROOT

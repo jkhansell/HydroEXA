@@ -38,9 +38,8 @@ sync:
 doxygen:
 	@command -v $(DOXYGEN) >/dev/null 2>&1 || { \
 		echo "doxygen not found -- skipping C++ API pages (set DOXYGEN=...)"; \
-		exit 0; }
-	@mkdir -p doxygen
-	cd doxygen && $(DOXYGEN) Doxyfile
+		exit 0; }; \
+	mkdir -p doxygen && cd doxygen && $(DOXYGEN) Doxyfile
 
 html: doxygen
 	$(SPHINXBUILD) -b html $(SPHINXOPTS) "$(SOURCEDIR)" "$(BUILDDIR)/html"

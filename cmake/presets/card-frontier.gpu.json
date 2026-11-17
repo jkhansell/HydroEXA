@@ -1,0 +1,44 @@
+{
+  "version": 6,
+  "include": [
+    "00-backends.json",
+    "01-precision.json",
+    "02-buildtype.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "card-frontier.gpu",
+      "displayName": "Frontier MI250X - gfx90a (fragment)",
+      "description": "Card fragment: ROCm/HIP gfx90a. AMReX requires AMReX_AMD_ARCH for HIP.",
+      "inherits": "backend-hip",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_MACHINE": "frontier.gpu",
+        "HYDROEXA_GPU_ARCH": "gfx90a"
+      }
+    },
+    {
+      "name": "frontier-gpu-double",
+      "displayName": "Frontier MI250X / DOUBLE",
+      "inherits": ["card-frontier.gpu", "precision-double", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    },
+    {
+      "name": "frontier-gpu-single",
+      "displayName": "Frontier MI250X / SINGLE",
+      "inherits": ["card-frontier.gpu", "precision-single", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "version": 6,
+  "include": [
+    "00-backends.json",
+    "01-precision.json",
+    "02-buildtype.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "card-kabreV100.gpu",
+      "displayName": "Kabre V100 - Volta sm_70 (fragment)",
+      "description": "Card fragment: CUDA sm_70, MPICH 4.1.1, AMReX MPI link workaround.",
+      "inherits": "backend-cuda",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_MACHINE": "kabreV100.gpu",
+        "HYDROEXA_GPU_ARCH": "70",
+        "HYDROEXA_MPI_LINK_WORKAROUND": "ON"
+      }
+    },
+    {
+      "name": "kabreV100-gpu-double",
+      "displayName": "Kabre V100 / DOUBLE",
+      "inherits": ["card-kabreV100.gpu", "precision-double", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    },
+    {
+      "name": "kabreV100-gpu-single",
+      "displayName": "Kabre V100 / SINGLE",
+      "inherits": ["card-kabreV100.gpu", "precision-single", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    }
+  ]
+}

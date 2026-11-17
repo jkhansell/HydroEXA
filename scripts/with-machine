@@ -1,0 +1,111 @@
+#!/bin/bash
+# =============================================================================
+# with-machine — load a machine toolchain, then run a command inside it
+# =============================================================================
+# The machine profile owns modules and compiler defaults only. Everything about
+# *what* gets built comes from a CMake preset. Overrides of the toolchain must
+# happen here rather than in a preset, because this is the only layer that
+# decides which dependency prefix (and therefore which HDF5/MPI ABI) is used.
+#
+#   ./scripts/with-machine <machine> [options] -- <command> [args...]
+#
+# Examples:
+#   ./scripts/with-machine kabreV100.gpu -- cmake --preset kabreV100-gpu-double
+#   ./scripts/with-machine kabreV100.gpu -- cmake --build --preset kabreV100-gpu-double
+#   ./scripts/with-machine kabreV100.gpu --cc /opt/mpich-4.2/bin/mpicxx -- \
+#       cmake --preset kabreV100-gpu-double
+#   ./scripts/with-machine local.cpu --list
+#
+# Options:
+#   --cc PATH          override the C compiler
+#   --cxx PATH         override the C++ compiler
+#   --fc PATH          override the Fortran compiler
+#   --no-modules       do not run the profile's module purge/load
+#   --machines-dir DIR look for profiles in DIR (default: <repo>/machines, or
+#                      $HYDROEXA_MACHINES_DIR)
+#   --list             list available machine profiles
+#   -h, --help         show this help
+# =============================================================================
+set -eo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+MACHINES_DIR="${HYDROEXA_MACHINES_DIR:-${REPO_DIR}/machines}"
+
+usage() {
+    sed -n '3,30p' "${BASH_SOURCE[0]}" | sed -e 's/^# \{0,1\}//'
+}
+
+list_machines() {
+    local f
+    echo "Available machine profiles in ${MACHINES_DIR}:"
+    for f in "${MACHINES_DIR}"/*; do
+        [ -f "$f" ] || continue
+        printf '  %s\n' "$(basename "$f")"
+    done
+}
+
+MACHINE=""
+CMD=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --cc)            export CC="$2";  shift 2 ;;
+        --cxx)           export CXX="$2"; shift 2 ;;
+        --fc)            export FC="$2";  shift 2 ;;
+        --no-modules)    export HYDROEXA_NO_MODULES=1; shift ;;
+        --machines-dir)  MACHINES_DIR="$2"; shift 2 ;;
+        --list)          list_machines; exit 0 ;;
+        -h|--help)       usage; exit 0 ;;
+        --)              shift; CMD=("$@"); break ;;
+        -*)              echo "error: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+        *)
+            if [ -z "${MACHINE}" ]; then
+                MACHINE="$1"; shift
+            else
+                echo "error: unexpected argument '$1' (missing '--'?)" >&2
+                exit 2
+            fi
+            ;;
+    esac
+done
+
+if [ -z "${MACHINE}" ]; then
+    echo "error: no machine given" >&2
+    usage >&2
+    exit 2
+fi
+
+if [ ${#CMD[@]} -eq 0 ]; then
+    echo "error: no command given (expected: -- <command> [args...])" >&2
+    usage >&2
+    exit 2
+fi
+
+PROFILE="${MACHINES_DIR}/${MACHINE}"
+if [ ! -f "${PROFILE}" ]; then
+    echo "error: no machine profile at ${PROFILE}" >&2
+    echo "" >&2
+    echo "A profile is toolchain only — modules plus compiler defaults:" >&2
+    echo "" >&2
+    echo "    if [ -z \"\${HYDROEXA_NO_MODULES:-}\" ]; then" >&2
+    echo "        module purge" >&2
+    echo "        module load <compiler> <mpi>" >&2
+    echo "    fi" >&2
+    echo "    export CC=\"\${CC:-mpicc}\" CXX=\"\${CXX:-mpicxx}\" FC=\"\${FC:-mpif90}\"" >&2
+    echo "    export HYDROEXA_GPU_BACKEND=\"CUDA\"   # or HIP, NONE" >&2
+    echo "    export HYDROEXA_GPU_ARCH=\"70\"        # or 89, native, gfx90a" >&2
+    echo "" >&2
+    list_machines >&2
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+source "${PROFILE}"
+
+echo "==> machine: ${MACHINE}"
+echo "==> CC=${CC:-<unset>}  CXX=${CXX:-<unset>}  FC=${FC:-<unset>}"
+echo "==> backend: ${HYDROEXA_GPU_BACKEND:-<unset>}  arch: ${HYDROEXA_GPU_ARCH:-<none>}"
+echo ""
+
+exec "${CMD[@]}"
