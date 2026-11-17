@@ -14,125 +14,116 @@ coupled to sediment transport (Exner equation), built on
 - Terrain: bathymetry `z` plus mask `n` (1 = fluid, -9999.0 = NODATA).
 - Two Riemann solvers are selectable at runtime: `Roe` (classic) and `HydrostaticRoe`
   (well-balanced / lake-at-rest preserving).
-- Active development branch: `AmrCore_refactor`.
+- Active development branch: `develop` (see `docs/contributing.md` for the branch model).
 
 ## Build System
 
-CMake build driven by a three-stage shell pipeline, orchestrated by one entry point:
+A CMake **superbuild** (HDF5 → AMReX → HydroEXA via `ExternalProject`) described by
+CMake presets, plus a legacy shell pipeline that still works. The reference is
+`docs/building.md`; this section is the short version an agent needs.
 
 ```bash
-bash scripts/build_HydroEXA.sh <machine.cpu|machine.gpu> <build_type> <precision>
+./scripts/with-machine <machine> -- cmake --preset <card>-<precision>
+./scripts/with-machine <machine> -- cmake --build build/<card>-<precision> -j 16
 # e.g.
-bash scripts/build_HydroEXA.sh local.gpu Release DOUBLE
-bash scripts/build_HydroEXA.sh kabreL40S.gpu Debug DOUBLE
+./scripts/with-machine kabreV100.gpu -- cmake --preset kabreV100-gpu-double
 ```
 
-- **Stages:** HDF5 → AMReX → HydroEXA. The child scripts (`build_HDF5.sh`,
-  `build_AMReX.sh`) take no arguments; the parent exports `HDF5_ROOT`, `AMREX_ROOT`,
-  `HYDROEXA_BUILD`, etc.
-- **Build types:** `Release`, `Debug`, `RelWithDebInfo`.
-- **Precision:** `DOUBLE` or `SINGLE`.
-- **Shared logic:** `scripts/lib.sh` (sourced, never executed) provides `print_banner()`,
-  `set_machine_env()`, `resolve_paths()`, `preflight()`, and execution guards.
-  It replaced the older `print_banner.sh` / `machine_selection.sh` pair.
-- **Output:** all artifacts are namespaced by machine target, because binaries are
-  toolchain- and architecture-specific:
-  - `build_<target>/hydroexa_<PRECISION>/HydroEXA` (build tree)
-  - `install_<target>/hydroexa_<PRECISION>/bin/HydroEXA` (install prefix)
-  - `install_<target>/hdf5` (precision-agnostic, shared per machine)
-  - `install_<target>/amrex_<PRECISION>` (AMReX is precision-specific)
-  - Build trees mirror the install layout under `build_<target>/`.
-- The machine target is the same argument passed to the build script (`kabreL40S.gpu`,
-  `local.gpu`, …), so a shared tree can host several machine builds side by side.
-- AMReX and HydroEXA are keyed by `PRECISION` (`DOUBLE`/`SINGLE`) because `amrex::Real`
-  is fixed at compile time; HDF5 is not, so it is shared. This lets SINGLE and DOUBLE
-  builds coexist and prevents the skip-guards from reusing a mismatched AMReX install.
-
-### What the script does for you (and what it expects from you)
-
-`build_HydroEXA.sh` is a **one-command pipeline**: you do not need to load modules,
-set paths, or invoke cmake yourself. It handles, in order:
-
-1. **Path resolution** — `resolve_paths "<target>"` (from `lib.sh`) namespaces
-   `BUILD_ROOT`/`INSTALL_ROOT` by machine target and precision, then exports
-   `HDF5_ROOT`, `AMREX_ROOT`, `HYDROEXA_SRC/BUILD/INSTALL` for the child stages.
-2. **Machine environment** — it **re-sources `machines/<target>` internally**.
-   The profile owns the full environment: `module purge` + all `module load`s
-   (compiler, MPI, CUDA, HDF5, **cmake**), `CC`/`CXX`/`FC`, and `GPU_FLAGS`.
-   Consequence: **anything you `module load` before running the script is silently
-   wiped** by the profile's `module purge`. Never rely on pre-loaded modules —
-   add the module to the machine profile instead.
-3. **Stage guards** — the third-party stages are skipped when their install
-   already exists:
-   - HDF5: skipped if `install_<target>/hdf5/` is populated
-   - AMReX: skipped if `install_<target>/amrex_<PRECISION>/` is populated
-   - HydroEXA: **never skipped** — the stage always reconfigures, rebuilds and
-     installs, so `bash scripts/build_HydroEXA.sh …` is safe to re-run after an
-     edit (object files are reused; only the CMake cache is deleted).
+- **Split of responsibility.** `machines/<machine>` is the *toolchain* — `module
+  purge`/`module load`, then `CC`/`CXX`/`FC`. The *preset* is the build — backend,
+  GPU architecture, precision, build type. Never put a `module load` in a preset,
+  and never put a build option in a profile: the dependency prefix is keyed by the
+  toolchain, so the two layers must stay separable.
+- **Preset layers:** `backend-*` → `card-*` → `precision-*`/`buildtype-*` → leaf
+  `<card>-<precision>`. The first three are fragments: listed by
+  `cmake --list-presets`, and a `FATAL_ERROR` if selected. Only leaves configure.
+- **Compiler overrides** go through `with-machine` (`--cc`, `--cxx`, `--fc`,
+  `--no-modules`), never through a preset, for the reason above.
+- **Root `CMakeLists.txt` is the superbuild; `src/CMakeLists.txt` is a standalone
+  project.** Never `add_subdirectory(src)` — the solver must stay configurable
+  against any AMReX + HDF5 installation.
+- **No machine names in CMake.** Build variation travels as capability variables:
+  `HYDROEXA_GPU_BACKEND` (`CUDA`/`HIP`/`NONE`), `HYDROEXA_GPU_ARCH`,
+  `HYDROEXA_MPI_LINK_WORKAROUND`. A new machine is a profile plus a preset, not an
+  edit to `CMakeLists.txt`.
+- **Artifacts** are keyed by toolchain and option set, not by machine name:
+  - `deps/<toolchain-tag>/<machine>/hdf5` — parallel HDF5, precision-independent
+  - `deps/<toolchain-tag>/<machine>/amrex_<PRECISION>_<hash>` — AMReX, per precision
+    and AMReX option set
+  - `build/<preset>/` — superbuild tree; `install/<preset>/bin/HydroEXA` — the solver
+  - The toolchain tag is a hash of the compiler's link line (`mpicxx -show`), so a
+    changed MPI lands in a new prefix instead of reusing an incompatible one.
+- **Build types:** `Release`, `Debug`, `RelWithDebInfo`. **Precision:** `DOUBLE` or
+  `SINGLE` (a preset axis; `amrex::Real` is fixed at compile time).
 
 ### Rebuilding after an edit
 
-The guards check *installs*, not source freshness, but the HydroEXA stage has no
-guard: re-running the script always brings the binary up to date.
-
 ```bash
-# Edit-compile loop, no reconfigure (fastest; needs the machine env in scope):
-source machines/<target>
-cmake --build  build_<target>/hydroexa_<PRECISION> -j 16
-cmake --install build_<target>/hydroexa_<PRECISION>
-
-# Full pipeline (reconfigures from scratch): HDF5/AMReX skipped, HydroEXA rebuilt
-bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
-
-# Toolchain/third-party changed (AMReX, HDF5, machine profile):
-rm -rf install_<target>/amrex_<PRECISION>   # or install_<target>/hdf5, or both
-bash scripts/build_HydroEXA.sh <target> <Release|Debug> <SINGLE|DOUBLE>
+# The edit -> binary loop (the machine environment must be in scope):
+./scripts/with-machine <machine> -- cmake --build build/<preset> -j 16
 ```
 
-Never `rm -rf` a HydroEXA build/install tree for an ordinary source edit — the
-incremental path above is a few seconds, a clean configure is minutes.
+The solver stage is `BUILD_ALWAYS`, so build and install run on every invocation
+while the configure step stays stamp-driven — `cmake --build` re-runs configure by
+itself when a `CMakeLists.txt` changes. There is no cache deletion and no reason to
+`rm -rf build/<preset>` for an ordinary source edit.
 
-The script's copy of the build re-runs configure from scratch each time (it deletes
-`CMakeCache.txt` in the HydroEXA stage), so there is no incremental-cache staleness
-to worry about; the direct `cmake --build` path keeps the cache and is therefore
-the faster loop once the tree is configured.
+A toolchain or dependency change does not need a manual `rm -rf` either: the prefix
+is keyed, so a different compiler or AMReX option set lands in a different directory.
+Delete a specific `deps/…` prefix only to force a rebuild of that dependency.
 
-### CMake version coupling (Kabré gotcha)
+### Legacy shell pipeline
 
-The installed `AMReXConfig.cmake` embeds
-`cmake_minimum_required(VERSION <the cmake that built AMReX>)`, so the HydroEXA
-stage's `find_package(AMReX)` fails if the running cmake is *older* than the one
-that built the AMReX install — even though the AMReX sources themselves only
-declare 3.18. Therefore: **the machine profile must load a cmake at least as new
-as the one that built `install_<target>/amrex_<PRECISION>`**; profiles already do
-this (`module load cmake/...`). If AMReX is ever rebuilt with a newer cmake,
-rebuild nothing else but be aware old install configs will now demand it.
+`scripts/build_HydroEXA.sh <machine> <buildtype> <precision>` still works and still
+runs the three stages, into `build_<machine>/` and `install_<machine>/`. It shares
+the profiles with the presets:
 
-**Open issue (as of 2026-11):** on Kabré (AlmaLinux 9.x), the `cmake/4.x` modules
-under `/opt/tools` fail with `libssl.so.10: cannot open shared object file` —
-those binaries were built against CentOS 7 OpenSSL libs, absent from the current
-image (both on the login node and GPU nodes). The AMReX install currently pinned
-was built with cmake 3.31.8. Until a working cmake ≥ 3.31.8 is available (e.g. a
-user-space cmake via `uv pip install cmake` wired into the machine profiles in
-place of the broken module), fresh AMReX/HydroEXA configure on Kabré is blocked.
+- profiles are **toolchain only**; the `GPU_FLAGS` string is derived by
+  `scripts/lib.sh` from the card description (`HYDROEXA_GPU_BACKEND` /
+  `HYDROEXA_GPU_ARCH`), so a profile cannot disagree with the presets;
+- a **missing profile is a hard error** (it used to warn and continue with no
+  compiler set);
+- the solver stage configures `-S "${HYDROEXA_SRC}/src"`, because the repository
+  root is a superbuild now, not the solver project.
 
-### Manual CMake configure (after AMReX is built)
+### CMake version coupling
+
+`AMReXConfig.cmake` embeds `cmake_minimum_required(VERSION <the cmake that built
+AMReX>)`, so `find_package(AMReX)` fails when the running cmake is *older* than the
+one that built the AMReX install — even though AMReX's own sources declare 3.18.
+
+The superbuild removes the problem instead of working around it: it builds AMReX
+with the cmake you invoke it with, so the requirement always matches. Kabré's
+`/usr/bin/cmake` (3.26.5) is enough; the `cmake/4.x` modules under `/opt/tools` are
+unusable there anyway (`libssl.so.10: cannot open shared object file`).
+
+The legacy path still points at the pre-existing `install_kabreV100.gpu/amrex_DOUBLE`,
+which was built with cmake 3.31.8, so that path keeps demanding cmake ≥ 3.31.8 and
+remains blocked on Kabré for the old reason.
+
+### Manual CMake configure (against an existing AMReX + HDF5)
+
+`src/` is a complete project; this is the path for a machine whose dependencies
+already exist, or for an out-of-tree solver build:
 
 ```bash
-cmake -S . -B build_<target>/hydroexa_<PRECISION> \
+cmake -S src -B build-hydroexa \
     -DHDF5_ROOT=<repo>/install_<target>/hdf5 \
     -DAMReX_ROOT=<repo>/install_<target>/amrex_<PRECISION>/lib/cmake/AMReX \
+    -DHYDROEXA_GPU_BACKEND=CUDA \
+    -DHYDROEXA_GPU_ARCH=70 \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_COMPILER=mpicxx \
-    -DCMAKE_INSTALL_PREFIX=<repo>/install_<target>/hydroexa_<PRECISION>
-cmake --build build_<target>/hydroexa_<PRECISION> -j 16
-cmake --install build_<target>/hydroexa_<PRECISION>
+    -DCMAKE_CXX_COMPILER=mpicxx
+cmake --build build-hydroexa -j 16
+cmake --install build-hydroexa
 ```
 
 ### Local development notes (RTX 4070 / Ubuntu 24.04)
 
-- Run builds inside the conda env: `mamba run -n hydroexa_env bash scripts/build_HydroEXA.sh ...`
-  so `mpicc`/`mpicxx` and the conda HDF5 CMake config are found consistently.
+- Run builds inside the conda env — `mamba run -n hydroexa_env ./scripts/with-machine
+  local.gpu -- cmake --preset local-gpu-double` (or the legacy
+  `bash scripts/build_HydroEXA.sh …`) — so `mpicc`/`mpicxx` and the conda HDF5 CMake
+  config are found consistently.
 - `local.cpu` / `local.gpu` use `mpicc`/`mpicxx` deliberately, to match the MPI variant
   that conda HDF5 links against (avoids `ompi_mpi_errors_throw_exceptions` symbol errors).
 - Do **NOT** set `LANGUAGE CUDA` on HydroEXA C++ sources: nvcc's C++ parser rejects C++20
@@ -152,8 +143,10 @@ cmake --install build_<target>/hydroexa_<PRECISION>
 | `frontier.gpu` | OLCF Frontier | Cray PrgEnv, ROCm 7.0, `gfx90a` (MI250X) |
 | `frontier.cpu` | OLCF Frontier | Cray PrgEnv, no GPU arch |
 
-Each profile is a shell file sourcing its own `module load` set and exporting `GPU_FLAGS`,
-`CC`/`CXX`/`FC`, and `HDF5_ROOT` where needed.
+Each profile owns the toolchain only: `module purge`/`module load`, then `CC`/`CXX`/`FC`
+(deferring to an already-set compiler), plus the card description
+`HYDROEXA_GPU_BACKEND` / `HYDROEXA_GPU_ARCH`. Profiles do **not** set `GPU_FLAGS` or any
+build option — `scripts/lib.sh` derives the legacy flag string from the card description.
 
 ## Repository Layout
 
@@ -191,12 +184,16 @@ HydroEXACode/
 │   ├── state/AmrMeshState.H      # AmrCore subclass owning state, terrain, solver, BCs
 │   └── utils/                    # Params.H, Constants.H, Logging.H,
 │                                 # MaskedAverageDown.H, FillPatchUtils.H
-├── machines/                     # one shell profile per target (7)
-├── scripts/                      # build_HydroEXA.sh, build_AMReX.sh, build_HDF5.sh, lib.sh, visualize.py
+├── CMakeLists.txt                # superbuild: HDF5 → AMReX → HydroEXA (ExternalProject)
+├── CMakePresets.json             # preset index; includes cmake/presets/*.json
+├── cmake/presets/                # backend/card/precision/buildtype fragments + leaves
+├── machines/                     # toolchain-only profiles (7)
+├── scripts/                      # with-machine, build_HydroEXA.sh (legacy), lib.sh, visualize.py
 ├── tests/                        # dambreak (E2E battery), dambreakNoAMR (legacy),
 │                                 # dambreakcircle, LakeAtRestRoe,
 │                                 # LakeAtRestHydrostaticRoe, LakeAtRestAugmentedRoe (stale)
 ├── PyHydroEXA/                   # Python companion package (uv workspace member)
+├── docs/building.md              # build reference: presets, artifacts, troubleshooting
 ├── docs/PIPELINE.md              # full simulation pipeline reference
 ├── plans/                        # design notes (HydrostaticRoe, pyhydroexa plans)
 ├── tpl/                          # amrex + hdf5 third-party sources/installs
@@ -231,8 +228,15 @@ HydroEXACode/
 ## Running
 
 ```bash
-mpirun -np <N> ../../build_<target>/hydroexa_<PRECISION>/HydroEXA inputs   # run from a test dir
+# preset build (run from a test directory: input paths are relative)
+mpirun -np <N> <repo>/install/<preset>/bin/HydroEXA inputs
+
+# legacy build
+mpirun -np <N> ../../build_<target>/hydroexa_<PRECISION>/HydroEXA inputs
 ```
+
+The binary must run inside the machine environment (`./scripts/with-machine <machine> --
+mpirun …`), otherwise the system `libstdc++` is too old for the gcc that built it.
 
 Run from the test directory (input paths are relative). Test cases:
 
