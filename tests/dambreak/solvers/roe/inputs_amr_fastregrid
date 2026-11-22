@@ -44,7 +44,7 @@ amr.do_subcycle            = 1
 amr.blocking_factor        = 32
 amr.v                      = 1
 
-amr.terrain_ref_lev        = 1
+amr.terrain_ref_lev        = 2
 
 amr.ref_ratio              = 2 2 2
 
