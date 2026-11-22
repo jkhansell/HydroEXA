@@ -35,6 +35,8 @@ Reads from the inputs file via `amrex::ParmParse`:
 | `HydroEXA` | `umag_grad_thresh` | Array of velocity-magnitude-gradient tagging thresholds |
 | `HydroEXA` | `z_grad_thresh` | Array of bathymetry-gradient tagging thresholds |
 | `HydroEXA` | `lo_bc`, `hi_bc` | Physical boundary condition types (0-5) per direction |
+| `HydroEXA` | `log_verbosity` | Verbosity level: `QUIET(-1)`, `INFO(0)`, `DIAG(1)`, `DEBUG(2)`, `EXPL(3)`, `WARN(4)`, `ERROR(5)` (or names) |
+| `HydroEXA` | `log_progress_every` | Print progress every N coarse steps (default 10) |
 | `amr` | `max_level` | Maximum AMR refinement level |
 | `amr` | `regrid_int` | Regridding frequency (iterations) |
 | `amr` | `n_error_buf` | Patch margin ahead of tagged cells, in level-0 cells (default 1) — see §8a |
@@ -486,3 +488,91 @@ StoreInitialMassMomentum() ← baseline for conservation error
 - [ ] `ComputeMassDiagnostics` uses `==` comparison for NODATA mask (`-9999.0`); should use tolerance-based comparison for floating-point safety
 - [ ] Per-level conservation breakdown printed (currently only totals)
 - [ ] Final conservation report at simulation end (last step only)
+
+---
+
+## Console Output
+
+HydroEXA uses a single structured logger (`include/utils/Logging.H`) with one
+verbosity knob. **Zero** direct `amrex::Print()`, `std::cout`, or `printf()`
+calls remain in `src/` or `include/`.
+
+### The knob
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `HydroEXA.log_verbosity` | int or string | `0` (INFO) | Verbosity threshold (§ below) |
+| `HydroEXA.log_progress_every` | int | `10` | Print progress every N coarse steps |
+| `HydroEXA.verbose` | bool | — | **Deprecated** alias; maps to `log_verbosity = 0` / `-1` with a warning |
+
+Accepts both integers and level names (case-insensitive):
+
+```
+HydroEXA.log_verbosity = 1        # DIAG
+HydroEXA.log_verbosity = DIAG     # same thing
+HydroEXA.log_verbosity = -1       # QUIET: WARN/ERROR only
+```
+
+CLI override works without extra code (ParmParse precedence):
+
+```bash
+HydroEXA.log_verbosity=3   # after the inputs file, wins over the default
+```
+
+### Level semantics
+
+| Level | Value | Meaning | Examples |
+|---|---|---|---|
+| `QUIET` | −1 | nothing but WARN/ERROR | batch runs |
+| `INFO` | 0 | lifecycle + results | geometry banner, initial mass, `[Conservation]`, checkpoints, final summary, periodic progress |
+| `DIAG` | 1 | per-level / per-regrid detail | pruning, regrid events, `[FluidMap eta]`, per-step progress |
+| `DEBUG` | 2 | internal state dumps | box counts, per-level MultiFab sizes |
+| `EXPL` | 3 | numerical-method internals | `[compute_dt] lev=… dt=… max|vel|=…` |
+| `WARN` | 4 | always | NaN terrain, `dt` near collapse |
+| `ERROR` | 5 | always, then abort | invalid input, illegal state |
+
+`WARN` and `ERROR` route to **stderr** (`amrex::ErrorStream()`); everything else
+routes to **stdout** (`amrex::OutStream()`), IO-processor only.  So
+`mpirun … 2> err.log` captures warnings and errors separately from the narrative.
+
+### Two independent knobs
+
+| | `amrex.verbose` (AMReX) | `HydroEXA.log_verbosity` (ours) |
+|---|---|---|
+| Who writes the records | AMReX internals | `src/`, `include/` |
+| What you get | `Initializing AMReX…`, distribution maps, arena/memory tables at finalize | geometry verification, initial mass, `[Conservation]`, regrid/pruning, `[compute_dt]` traces |
+| Granularity | one integer, coarse | 6 named levels with defined semantics |
+| Insight into solver state | **none** | the whole point |
+
+We neither read nor set `amrex.verbose`.  The knobs are fully independent:
+`amrex.verbose = 0` with `log_verbosity = 0` gives silent AMReX + solver INFO;
+`amrex.verbose = 2` with `log_verbosity = -1` gives chatty AMReX + silent solver.
+
+### Progress line
+
+At `INFO` every `log_progress_every` coarse steps (default 10) and at `DIAG`
+every step:
+
+```
+[Step 1360] t=29.98/30.00 (99.9%)  dt=0.022048  wall=4.8ms  eta=0.0s
+```
+
+Includes the percentage of `max_time` and a naive ETA
+(`(max_time - t) / (t / wall_total)`).  The `[Step ` prefix is preserved so
+existing greps still work.
+
+### Line counts (dambreak, 1361 coarse steps, 2 levels, 1 rank)
+
+| `log_verbosity` | Lines | Notes |
+|---|---|---|
+| −1 (QUIET) | < 20 | WARN/ERROR only |
+| 0 (INFO) | ≤ 200 | geometry banner + progress + conservation + final summary |
+| 1 (DIAG) | ~1361 | every step printed |
+| 3 (EXPL) | ~4373 | per-step `[compute_dt]` trace restored |
+
+### Precision
+
+All floating-point log records use `std::setprecision(10)` set once per record
+in the `LogRecord` constructor.  No `std::to_string` (which is `%.6f` for
+doubles) appears in any log path — it is reserved for `LOG_ERROR` abort messages
+where cost is irrelevant.

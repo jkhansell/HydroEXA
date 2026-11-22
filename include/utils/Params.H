@@ -35,6 +35,8 @@ struct RuntimeParameters
     amrex::Real max_time{1.0};        ///< Stop time, physical seconds (``HydroEXA.max_time``).
     amrex::Real mass_diag_freq{-1.0}; ///< Mass-diagnostic interval, s; negative disables.
     int iteration{0};                 ///< Coarse-level step counter.
+    int log_progress_every{10};       ///< Print progress every N coarse steps (``HydroEXA.log_progress_every``).
+    amrex::Real wall_elapsed{0.0};    ///< Cumulative wall time elapsed so far.
 };
 
 /**

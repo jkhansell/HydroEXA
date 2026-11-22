@@ -193,6 +193,24 @@ struct Roe : public BaseSolver<Roe> {
                         int lev,
                         amrex::Real time,
                         const PhysicsParameters& phys_params);
+
+
+    /** \brief
+     * 
+     * 
+     * 
+     * 
+     * 
+     * 
+    */
+
+    void wet_dry_correction(amrex::Vector<amrex::MultiFab>& U,
+                            const amrex::Vector<amrex::MultiFab>& terrain,
+                            const amrex::Vector<amrex::Geometry>& geom,
+                            int lev);
+
+    amrex::Vector<amrex::Array<amrex::MultiFab, AMREX_SPACEDIM>> flux_fine;
+    amrex::Vector<amrex::Array<amrex::MultiFab, AMREX_SPACEDIM>> flux_crse;
 };
 
 #endif // ROE_H
