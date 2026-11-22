@@ -244,7 +244,7 @@ public:
      * \param bccomp First entry of the cached ``BCRec`` set to use.
      */
     void operator()(amrex::MultiFab& mf, int dcomp, int ncomp,
-                    const amrex::IntVect& nghost, amrex::Real /*time*/, int bccomp)
+                    const amrex::IntVect& nghost, amrex::Real time, int bccomp)
     {
         if (m_d_bcs.empty() || m_geom.isAllPeriodic()) { return; }
 
