@@ -574,6 +574,7 @@ void AmrMeshState::RemakeLevel(int lev, amrex::Real time, const amrex::BoxArray&
     std::swap(new_EtaScratchOld, EtaScratchOld[lev]);
     std::swap(new_EtaScratchNew, EtaScratchNew[lev]);
     std::swap(new_DT, DynamicTerrain[lev]);
+    terrain_ghosts_valid[lev] = 0;   // new boxes: the ghost ring must be refilled
 
     ComputeEta(lev, false);
 
