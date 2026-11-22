@@ -1,14 +1,20 @@
 #!/bin/bash
+# Kabre KURA — CPU only, gcc 11.1 + MPICH 4.1.1
+#
+# Toolchain only. Build options come from the CMake presets; see
+# cmake/presets/card-kabreKURA.cpu.json.
 
-module purge
-module load mpich/4.1.1
-module load gcc/11.1.0
-module load szip/2.1
-module load hdf5/1.14.6-parallel-mpich-4.1.1
+if [ -z "${HYDROEXA_NO_MODULES:-}" ]; then
+    module purge
+    module load mpich/4.1.1
+    module load gcc/11.1.0
+    module load szip/2.1
+    module load hdf5/1.14.6-parallel-mpich-4.1.1
+fi
 
-export HDF5_ROOT=/opt/libs/hdf5-1.14.6-parallel-mpich-4.1.1
-export CMAKE_FLAGS="-DHDF5_ROOT=$HDF5_ROOT"
+export CC="${CC:-mpicc}"
+export CXX="${CXX:-mpicxx}"
+export FC="${FC:-mpif90}"
 
-export CC=mpicc
-export CXX=mpicxx
-export FC=mpif90
+export HYDROEXA_GPU_BACKEND="NONE"
+export HYDROEXA_MPI_LINK_WORKAROUND="ON"

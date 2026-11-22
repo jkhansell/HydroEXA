@@ -77,7 +77,10 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
         if (istep[lev] % amr_p.regrid_int == 0) {
 
             int old_finest = finestLevel();
-            regrid(lev, time);
+            {
+                BL_PROFILE("AmrMeshState::TimeStepWithSubcycling::Regrid");
+                regrid(lev, time);
+            }
 
             for (int k = lev; k <= finestLevel(); ++k) {
                 last_regrid_step[k] = istep[k];
@@ -129,6 +132,7 @@ void AmrMeshState::TimeStepWithSubcycling(int lev, amrex::Real time, int iterati
 
         // Reflux: correct lev based on coarse-fine flux mismatch
         if (amr_p.do_reflux && flux_reg[lev + 1] != nullptr) {
+            BL_PROFILE("AmrMeshState::TimeStepWithSubcycling::Reflux");
             flux_reg[lev + 1]->Reflux(U_new[lev], 1.0, 0, 0, U_new[lev].nComp(), Geom()[lev]);
         }
 

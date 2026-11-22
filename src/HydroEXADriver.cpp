@@ -1,6 +1,7 @@
 #include <string>
 #include <HydroEXA.H>
 #include <utils/Logging.H>
+#include <iomanip>
 
 using namespace amrex;
 
@@ -29,11 +30,9 @@ int main(int argc, char* argv[]){
         // wallclock time
         auto end_total = amrex::second() - strt_total;
 
-        if (hydroexa.Verbose()) {
-            // print wallclock time
-            ParallelDescriptor::ReduceRealMax(end_total ,ParallelDescriptor::IOProcessorNumber());
-            LOG(INFO, "\nTotal Time: " + std::to_string(end_total) + '\n');
-        }
+        // print wallclock time
+        ParallelDescriptor::ReduceRealMax(end_total, ParallelDescriptor::IOProcessorNumber());
+        LOG_STREAM(INFO) << "\nTotal Time: " << end_total;
     } 
 
     amrex::Finalize();

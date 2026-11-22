@@ -155,6 +155,37 @@ public:
         }, m_solver);
     }
 
+    /**
+     * \brief Run \p f on the concrete solver if it owns per-level flux buffers.
+     *
+     * Solvers that build side-selected face fluxes for refluxing (Roe today)
+     * expose ``flux_fine`` / ``flux_crse``; those buffers must be redefined
+     * whenever the level boxes change.  Solvers without them, and the
+     * monostate, are skipped -- which is what the ``requires`` test expresses.
+     *
+     * The test has to live inside a visitor: ``s`` is a template parameter, so
+     * the requirement is dependent and a solver lacking the members is a
+     * substitution failure rather than a hard error.
+     */
+    template <typename F>
+    void with_flux_buffers(F&& f) {
+        std::visit([&](auto&& s) {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (!std::is_same_v<T, std::monostate> &&
+                          requires { s.flux_fine; s.flux_crse; }) {
+                f(s);
+            }
+        }, m_solver);
+    }
+
+    /// Size the per-level flux buffers, for solvers that have any.
+    void resize_flux_buffers(int nlevs) {
+        with_flux_buffers([nlevs](auto& s) {
+            s.flux_fine.resize(nlevs);
+            s.flux_crse.resize(nlevs);
+        });
+    }
+
 private:
     SolverType m_solver;
 };

@@ -11,11 +11,9 @@ pyhydroexa = { workspace = true }
 
 [tool.uv.workspace]
 members = ["PyHydroEXA"]
-
-[dependency-groups]
-docs = [
-    "sphinx>=8.1",
-    "myst-parser>=4.0",
-    "furo>=2024.8.6",
-    "breathe>=4.35",
-]
+# docs/ is its own uv project, deliberately outside this workspace.  A workspace
+# sync installs every member's dependency tree, which for pyhydroexa includes
+# GDAL, yt and rasterio -- none of which the documentation build touches.
+# `exclude` keeps `uv sync` here from ever walking into docs/, and keeps
+# `uv sync` in docs/ from resolving this project.
+exclude = ["docs"]

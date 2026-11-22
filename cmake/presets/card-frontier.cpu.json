@@ -1,0 +1,43 @@
+{
+  "version": 6,
+  "include": [
+    "00-backends.json",
+    "01-precision.json",
+    "02-buildtype.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "card-frontier.cpu",
+      "displayName": "Frontier CPU nodes (fragment)",
+      "description": "Card fragment: no GPU, Cray MPICH via PrgEnv.",
+      "inherits": "backend-cpu",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_MACHINE": "frontier.cpu"
+      }
+    },
+    {
+      "name": "frontier-cpu-double",
+      "displayName": "Frontier CPU / DOUBLE",
+      "inherits": ["card-frontier.cpu", "precision-double", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    },
+    {
+      "name": "frontier-cpu-single",
+      "displayName": "Frontier CPU / SINGLE",
+      "inherits": ["card-frontier.cpu", "precision-single", "buildtype-release"],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "OFF",
+        "HYDROEXA_PRESET": "${presetName}"
+      }
+    }
+  ]
+}

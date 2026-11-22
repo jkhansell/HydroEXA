@@ -1,0 +1,23 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "buildtype-release",
+      "displayName": "Release (fragment)",
+      "description": "CMAKE_BUILD_TYPE=Release. Leaves inherit this; override with buildtype-debug in a user preset.",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "buildtype-debug",
+      "displayName": "Debug (fragment)",
+      "description": "CMAKE_BUILD_TYPE=Debug. Compose after a leaf, e.g. inherits: [\"kabreV100-gpu-double\", \"buildtype-debug\"].",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ]
+}

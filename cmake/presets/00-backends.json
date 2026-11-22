@@ -1,0 +1,35 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "backend-cuda",
+      "displayName": "CUDA backend (fragment)",
+      "description": "AMReX GPU backend = CUDA. Compose with a card and a precision.",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_GPU_BACKEND": "CUDA"
+      }
+    },
+    {
+      "name": "backend-hip",
+      "displayName": "HIP backend (fragment)",
+      "description": "AMReX GPU backend = HIP / ROCm. Compose with a card and a precision.",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_GPU_BACKEND": "HIP"
+      }
+    },
+    {
+      "name": "backend-cpu",
+      "displayName": "CPU backend (fragment)",
+      "description": "AMReX GPU backend = NONE. Compose with a card and a precision.",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_FRAGMENT_ONLY": "ON",
+        "HYDROEXA_GPU_BACKEND": "NONE"
+      }
+    }
+  ]
+}

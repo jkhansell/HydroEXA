@@ -15,69 +15,100 @@ HydroEXA is a GPU-accelerated, performance-portable AMR solver for shallow water
 
 ### Prerequisites
 
-- CMake ≥ 3.20
+- CMake ≥ 3.25 (≥ 3.20 for the standalone solver project)
 - MPI (MPICH or Cray MPICH)
-- HDF5 (parallel build)
 - CUDA Toolkit (for GPU targets) or ROCm (for Frontier)
-- AMReX source (checked out as `tpl/amrex` submodule)
+- AMReX and HDF5 sources (checked out as `tpl/amrex` and `tpl/hdf5` submodules)
 
 ### Quick Build
 
-```bash
-bash scripts/build_HydroEXA.sh <machine_target> <build_type>
-```
+The repository root is a superbuild: HDF5 → AMReX → HydroEXA, driven by CMake
+presets. The machine profile supplies the toolchain, the preset supplies the
+build options.
 
-**Machine targets:** `local.gpu`, `local.cpu`, `kabreL40S.gpu`, `kabreV100.gpu`, `frontier.gpu`
-**Build types:** `Release`, `Debug`, `RelWithDebInfo`
+```bash
+./scripts/with-machine <machine> -- cmake --preset <card>-<precision>
+./scripts/with-machine <machine> -- cmake --build build/<card>-<precision> -j 16
+```
 
 Example:
-```bash
-bash scripts/build_HydroEXA.sh kabreL40S.gpu Release
-```
-
-The build script handles a three-stage cascade: HDF5, AMReX, then HydroEXA. All build and
-install artifacts are namespaced by machine target, because the binaries are
-toolchain- and architecture-specific:
-
-```
-build_<machine_target>/{hdf5, amrex_<PRECISION>, hydroexa_<PRECISION>}/     # build trees
-install_<machine_target>/{hdf5, amrex_<PRECISION>, hydroexa_<PRECISION>}/   # install prefixes
-```
-
-HDF5 has no single/double variant, so it is shared per machine. AMReX and HydroEXA
-encode `amrex::Real` at compile time and are keyed by precision, so `DOUBLE` and
-`SINGLE` builds coexist for the same machine.
-
-The executable is installed to
-`install_<machine_target>/hydroexa_<PRECISION>/bin/HydroEXA`.
-
-### Manual CMake Build
 
 ```bash
-# Configure (after AMReX is built)
-cmake -S . -B build_<machine_target>/hydroexa_<PRECISION> \
-    -DHYDROEXA_GPU_BACKEND=<machine_target> \
-    -DHDF5_ROOT=install_<machine_target>/hdf5 \
+./scripts/with-machine kabreV100.gpu -- cmake --preset kabreV100-gpu-double
+./scripts/with-machine kabreV100.gpu -- cmake --build build/kabreV100-gpu-double -j 16
+```
+
+The binary is installed to `install/<card>-<precision>/bin/HydroEXA`.
+`cmake --list-presets` shows every card and precision; selecting a fragment
+(`backend-cuda`, `precision-double`, …) stops with instructions instead of
+building half a configuration.
+
+Artifacts are keyed by toolchain and by option set, not by machine name:
+
+```
+deps/<toolchain-tag>/<machine>/hdf5/                      # parallel HDF5, precision-independent
+deps/<toolchain-tag>/<machine>/amrex_<PRECISION>_<hash>/  # AMReX, per precision and option set
+build/<preset>/                                           # superbuild tree
+install/<preset>/bin/HydroEXA                             # the solver
+```
+
+HDF5 has no single/double variant, so it is shared per toolchain; AMReX and
+HydroEXA encode `amrex::Real` at compile time and are keyed by precision, so
+`DOUBLE` and `SINGLE` builds coexist.
+
+The full reference — preset layers, compiler overrides, adding a machine,
+troubleshooting — is [`docs/building.md`](docs/building.md).
+
+### Legacy shell pipeline
+
+The three-stage shell script is still supported and now shares the profiles with
+the presets:
+
+```bash
+bash scripts/build_HydroEXA.sh <machine_target> <build_type> <precision>
+bash scripts/build_HydroEXA.sh kabreL40S.gpu Release DOUBLE
+```
+
+**Machine targets:** `local.gpu`, `local.cpu`, `kabreL40S.gpu`, `kabreV100.gpu`,
+`kabreKURA.cpu`, `frontier.gpu`, `frontier.cpu`
+**Build types:** `Release`, `Debug`, `RelWithDebInfo`
+**Precision:** `DOUBLE`, `SINGLE`
+
+It installs to `install_<machine_target>/hydroexa_<PRECISION>/bin/HydroEXA`,
+side by side with any preset build.
+
+### Standalone solver build
+
+`src/` is a complete CMake project and can be configured against any AMReX and
+HDF5 installation:
+
+```bash
+cmake -S src -B build-hydroexa \
     -DAMReX_ROOT=install_<machine_target>/amrex_<PRECISION>/lib/cmake/AMReX \
+    -DHDF5_ROOT=install_<machine_target>/hdf5 \
+    -DHYDROEXA_GPU_BACKEND=CUDA \
+    -DHYDROEXA_GPU_ARCH=70 \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_COMPILER=g++
+    -DCMAKE_CXX_COMPILER=mpicxx
 
-# Build and install
-cmake --build build_<machine_target>/hydroexa_<PRECISION> -j 16
-cmake --install build_<machine_target>/hydroexa_<PRECISION>
+cmake --build build-hydroexa -j 16
+cmake --install build-hydroexa
 ```
 
 ### Machine Profiles
 
-Machine-specific compiler and GPU settings are stored in `machines/`:
+Machine profiles hold the toolchain only — modules plus `CC`/`CXX`/`FC` — and
+defer to the caller's environment when a compiler is already set:
 
 | Profile | Platform | GPU Backend | Architecture |
 |---|---|---|---|
 | `local.gpu` | Linux (gcc) | CUDA | native |
 | `local.cpu` | Linux (gcc) | CPU-only | — |
-| `kabreL40S.gpu` | Polaris (MPICH + CUDA 12.4) | CUDA | 8.9 (L40S Ada) |
-| `kabreV100.gpu` | Polaris (MPICH + CUDA 12.4) | CUDA | 7.0 (V100 Volta) |
+| `kabreL40S.gpu` | Kabré (MPICH + CUDA 12.4) | CUDA | 8.9 (L40S Ada) |
+| `kabreV100.gpu` | Kabré (MPICH + CUDA 12.4) | CUDA | 7.0 (V100 Volta) |
+| `kabreKURA.cpu` | Kabré (MPICH, gcc 11.1) | CPU-only | — |
 | `frontier.gpu` | OLCF Frontier (Cray) | HIP | gfx90a (MI250X) |
+| `frontier.cpu` | OLCF Frontier (Cray) | CPU-only | — |
 
 ## Running Simulations
 

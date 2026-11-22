@@ -71,7 +71,6 @@ PREDEFINED             = AMREX_GPU_DEVICE= \
                          AMREX_GPU_CONSTANT= \
                          AMREX_FORCE_INLINE= \
                          AMREX_SPACEDIM=2
-CLANG_ASSISTED_PARSING = NO
 
 # --- Warnings (gate) ----------------------------------------------------
 # Every file, type and member in include/ carries a doc comment, so an

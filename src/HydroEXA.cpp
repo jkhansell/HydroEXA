@@ -1,6 +1,7 @@
 #include <AMReX_ParmParse.H>
 #include <HydroEXA.H>
 #include <utils/Logging.H>
+#include <iomanip>
 
 HydroEXA::HydroEXA() {
     ReadParameters();
@@ -42,6 +43,7 @@ void HydroEXA::ReadParameters() {
         pp.query("cfl", physics_params.cfl);
         pp.query("max_time", runtime_params.max_time);
         pp.query("mass_diag_freq", runtime_params.mass_diag_freq);
+        pp.query("log_progress_every", runtime_params.log_progress_every);
 
         int n = pp.countval("h_grad_thresh");
         if (n > 0) {
@@ -244,11 +246,16 @@ HydroEXA::Compute() {
     amrex::Real plot_time_next = (io_params.plot_freq > 0) ? io_params.plot_freq : -1.0;
     amrex::Real chk_time_next  = (io_params.chk_freq  > 0) ? io_params.chk_freq  : -1.0;
     amrex::Real mass_time_next = (runtime_params.mass_diag_freq > 0) ? runtime_params.mass_diag_freq : -1.0;
+    amrex::Real sim_second_next = 1.0;  // Progress line every simulation second
     int plot_iter = 0;
     int chk_iter  = 0;
 
-    MeshState->WritePlotfile(plot_iter, runtime_params.etime);
-    plot_iter++;
+    // The initial snapshot is a plotfile like any other: plot_freq <= 0 means
+    // "no plotfiles" (see IOParameters), so a timing run writes nothing at all.
+    if (io_params.plot_freq > 0) {
+        MeshState->WritePlotfile(plot_iter, runtime_params.etime);
+        plot_iter++;
+    }
 
     while (runtime_params.etime < runtime_params.max_time)
     {
@@ -273,15 +280,25 @@ HydroEXA::Compute() {
 
         const double wall_end = amrex::ParallelDescriptor::second();
 
-        if (Verbose() && amrex::ParallelDescriptor::IOProcessor())
+        // Progress line: print every simulation second (t = 1, 2, 3, ...)
+        const bool is_io = amrex::ParallelContext::IOProcessorSub();
+        const int verb = Logger::instance().verbosity();
+        if (is_io && verb >= static_cast<int>(LogLevel::INFO) &&
+            runtime_params.etime >= sim_second_next)
         {
-            LOG(INFO,
-                "[Step "
-                + std::to_string(runtime_params.iteration)
-                + "]"
-                + " t=" + std::to_string(runtime_params.etime)
-                + "  dt=" + std::to_string(MeshState->dt[0])
-                + "  wall=" + std::to_string(wall_end - wall_start) + " s\n");
+            const amrex::Real pct = runtime_params.max_time > 0.0
+                ? 100.0 * runtime_params.etime / runtime_params.max_time : 0.0;
+            const amrex::Real wall_total = runtime_params.wall_elapsed;
+            const amrex::Real eta = (wall_total > 0.0 && runtime_params.etime > 0.0)
+                ? (runtime_params.max_time - runtime_params.etime) / runtime_params.etime * wall_total
+                : 0.0;
+            LOG_STREAM(INFO) << "[Step " << runtime_params.iteration << "] t="
+                             << runtime_params.etime << "/" << runtime_params.max_time
+                             << " (" << std::fixed << std::setprecision(1) << pct << "%)"
+                             << std::defaultfloat << "  dt=" << MeshState->dt[0]
+                             << "  wall=" << (wall_end - wall_start) << "s"
+                             << "  eta=" << std::setprecision(1) << eta << "s";
+            sim_second_next += 1.0;
         }
 
         // Plotfiles
@@ -303,10 +320,8 @@ HydroEXA::Compute() {
         }
     }
 
-    if (Verbose()) {
-        LOG(INFO, "\nSimulation complete: t = " + std::to_string(runtime_params.etime)
-               + " (" + std::to_string(runtime_params.iteration) + " coarse steps)\n");
-    }
+    LOG_STREAM(INFO) << "\nSimulation complete: t = " << runtime_params.etime
+                     << " (" << runtime_params.iteration << " coarse steps)";
 }
 
 void 

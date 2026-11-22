@@ -15,7 +15,7 @@ void Checkpointer::Write(
     const std::string checkpoint_name = amrex::Concatenate(chk_file, iteration);
     const int nlevels = ctx.finest_level + 1;
 
-    LOG(INFO, "Writing checkpoint " + checkpoint_name);
+    LOG_STREAM(INFO) << "Writing checkpoint " << checkpoint_name;
 
     amrex::PreBuildDirectorHierarchy(checkpoint_name, "Level_", nlevels, true);
 
@@ -78,7 +78,7 @@ void Checkpointer::Read(
     int do_reflux,
     const std::string& restart_chkfile)
 {
-    LOG(INFO, "Restart from checkpoint " + restart_chkfile);
+    LOG_STREAM(INFO) << "Restart from checkpoint " << restart_chkfile;
 
     std::string file_path(restart_chkfile + "/Header");
 

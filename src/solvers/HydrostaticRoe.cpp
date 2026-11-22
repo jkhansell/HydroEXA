@@ -2,8 +2,7 @@
 #include <solvers/kernels/HydrostaticRoe.H>
 #include <boundaries/BCFill.H>
 #include <utils/Constants.H>
-#include <AMReX_ParallelDescriptor.H>
-#include <AMReX_Print.H>
+#include <utils/Logging.H>
 
 amrex::Real
 HydrostaticRoe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
@@ -70,10 +69,8 @@ HydrostaticRoe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
     amrex::Real dt_est = amrex::get<0>(local);
     amrex::Real max_vel = amrex::get<1>(local);
 
-    if (amrex::ParallelDescriptor::IOProcessor()) {
-        amrex::Print() << "[compute_dt] lev=" << lev << " dt=" << dt_est
-                       << " max|vel|=" << max_vel << "\n";
-    }
+    LOG_STREAM(EXPL) << "[compute_dt] lev=" << lev << " dt=" << dt_est
+                     << " max|vel|=" << max_vel;
 
     // dt collapse = single-cell velocity explosion. Stop instead of spinning
     // at dt=0; the per-step max|vel| trace above shows the growth history.
@@ -96,6 +93,8 @@ void HydrostaticRoe::tag_cells_Impl(amrex::TagBoxArray& tags,
                          amrex::Real time,
                          const PhysicsParameters& phys_params)
 {
+    BL_PROFILE("HydrostaticRoe::tag_cells_Impl");
+
     const auto dx = geom.CellSizeArray();
     const amrex::Real z_thresh = phys_params.z_grad_thresh[lev];
     const amrex::Real h_thresh = phys_params.h_grad_thresh[lev];
@@ -401,6 +400,8 @@ HydrostaticRoe::compute_amrex_effective_fluxes(
 void
 HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real time) {
 
+    BL_PROFILE("HydrostaticRoe::compute_fluxes_Impl");
+
     std::swap(ctx.U_new[lev], ctx.U_old[lev]);
 
     amrex::MultiFab& U_n = ctx.U_new[lev];
@@ -473,9 +474,12 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
     // coarse level's h into the fine ghosts, and eta_ghost = h_coarse + z_fine
     // is NOT the lake surface on a sloping bed — that mismatch drove the
     // slow dipole that collapsed T1a at t≈20.9.
-    ctx.FillPatchEta(lev, time, Eta_ext, ctx.EtaBCs, 0, 1);
-    ctx.FillPatch(lev, time, U_ext, ctx.UBCs, 1, U_n.nComp() - 1);   // momenta only
-    ctx.FillPatchTerrain(lev, time, Terrain_ext, ctx.TerrainBCs, 0, Terrain.nComp());
+    {
+        BL_PROFILE("HydrostaticRoe::fluxes::FillPatch");
+        ctx.FillPatchEta(lev, time, Eta_ext, ctx.EtaBCs, 0, 1);
+        ctx.FillPatch(lev, time, U_ext, ctx.UBCs, 1, U_n.nComp() - 1);   // momenta only
+        ctx.FillPatchTerrain(lev, time, Terrain_ext, ctx.TerrainBCs, 0, Terrain.nComp());
+    }
 
     // Rebuild h over the full grown region (Rule R3 primitive). This also
     // overwrites the valid comp0 with max(0, eta - z), which is idempotent
@@ -499,6 +503,7 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
     {
+        BL_PROFILE("HydrostaticRoe::fluxes::Kernels");
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             auto const& statein = U_ext.array(mfi);
@@ -528,6 +533,7 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
     {
+        BL_PROFILE("HydrostaticRoe::fluxes::Update");
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             const int ncomp = U_o.nComp();
@@ -604,6 +610,7 @@ HydrostaticRoe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, 
     // 5. PREPARE AND SYNCHRONIZE WITH FLUX REGISTERS
     // ------------------------------------------------------------------------
     if (ctx.do_reflux) {
+        BL_PROFILE("HydrostaticRoe::fluxes::FluxRegisters");
         // Reflux needs a single conservative interface flux. Use the mean of
         // the two effective fluxes: they are identical on a flat bed and
         // differ only by the hydrostatic pressure correction.

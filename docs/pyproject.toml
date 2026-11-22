@@ -1,0 +1,28 @@
+[project]
+name = "hydroexa-docs"
+version = "0.0.0"
+description = "Sphinx environment for the HydroEXA documentation tree"
+requires-python = ">=3.12,<3.13"
+
+# The Sphinx stack, plus the three libraries `pyhydroexa` imports at module
+# level.  That is the whole list: everything heavier in the package (`yt`,
+# `geopandas`, `rasterio`, `fiona`, `h5py`, `polars`, ...) is imported inside
+# functions, so autodoc never needs it.
+#
+# This project exists so that building the docs cannot fail on a runtime
+# dependency.  `fiona` has no wheel for every CPython, and installing it from
+# source wants GDAL; pulling the whole workspace in to build a website turned
+# that into a broken CI job.
+dependencies = [
+    "sphinx>=8.1",
+    "myst-parser>=4.0",
+    "furo>=2024.8.6",
+    "breathe>=4.35",
+    "numpy",
+    "scipy",
+    "matplotlib",
+]
+
+[tool.uv]
+# Nothing to build or install: this project is an environment, not a library.
+package = false

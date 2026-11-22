@@ -1,0 +1,21 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "include": [
+    "cmake/presets/00-backends.json",
+    "cmake/presets/01-precision.json",
+    "cmake/presets/02-buildtype.json",
+    "cmake/presets/03-profiling.json",
+    "cmake/presets/card-kabreV100.gpu.json",
+    "cmake/presets/card-kabreL40S.gpu.json",
+    "cmake/presets/card-kabreKURA.cpu.json",
+    "cmake/presets/card-frontier.gpu.json",
+    "cmake/presets/card-frontier.cpu.json",
+    "cmake/presets/card-local.gpu.json",
+    "cmake/presets/card-local.cpu.json"
+  ]
+}

@@ -78,17 +78,27 @@ void AmrMeshState::ResizeLevels(int nlevs) {
     EtaScratchNew.resize(nlevs);
     DynamicTerrain.resize(nlevs);
 
+    // One cached boundary filler per level and variable group.  AmrCore only
+    // ever grows the hierarchy one level at a time, so this resize happens
+    // before any MakeNewLevel* call that writes into these slots.
+    U_physbc.resize(nlevs);
+    Eta_physbc.resize(nlevs);
+    Terrain_physbc.resize(nlevs);
+
     t_new.resize(nlevs);
     t_old.resize(nlevs);
     dt.resize(nlevs);
 
     flux_reg.resize(nlevs+1);
+    solver.resize_flux_buffers(nlevs+1);
+    terrain_ghosts_valid.resize(nlevs+1, 0);
     istep.resize(nlevs, 0);
     nsubsteps.resize(nlevs, 1);
 }
 
 
 void AmrMeshState::Initialize() {
+    BL_PROFILE("AmrMeshState::Initialize");
     
     amrex::Real time = 0.0;
     int initial_step = 0;
@@ -113,6 +123,7 @@ void AmrMeshState::Initialize() {
 
 
 void AmrMeshState::InitializeTerrainFluid() {
+    BL_PROFILE("AmrMeshState::InitializeTerrainFluid");
 
     amrex::IntVect dom_lo(AMREX_D_DECL(0, 0, 0));
     amrex::IntVect dom_hi(AMREX_D_DECL(metadata.global_nx - 1, metadata.global_ny - 1, 0));

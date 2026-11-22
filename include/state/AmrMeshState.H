@@ -240,10 +240,15 @@ class AmrMeshState : public amrex::AmrCore {
         void FillCoarsePatchTerrain (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
         /// Fill the free surface from the parent, then rebuild depth.
         void FillCoarsePatchEta (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
-        /// Fill momenta from the parent (components 1..), leaving depth alone.
-        void FillCoarsePatchMomentum (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
-        /// Fill all components from the parent, for callers that want the old behaviour.
-        void FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs);
+        /**
+         * \brief Fill a component range from the parent level.
+         *
+         * The coarse source is read from \p scomp and written to \p dcomp, so
+         * one routine covers both "all components" and "momenta only" (depth
+         * must never cross a resolution change; see ``FillPatchEta``).
+         */
+        void FillCoarsePatch (int lev, amrex::Real time, amrex::MultiFab& mf, amrex::Vector<amrex::BCRec> bcs,
+                              int scomp = 0, int dcomp = 0, int ncomp = -1);
 
         /// Restrict every level onto the one below, finest to coarsest.
         void AverageDown (amrex::Vector<amrex::MultiFab>& arr);
@@ -297,6 +302,11 @@ class AmrMeshState : public amrex::AmrCore {
         amrex::Vector<amrex::BCRec> Eta_bcs;      // Per-component mathematical BCRecs
         amrex::Vector<amrex::BCRec> Terrain_bcs;  // Per-component mathematical BCRecs
 
+        // In AmrMeshState (member variables):
+        amrex::Vector<HydroPhysBC> U_physbc;
+        amrex::Vector<HydroPhysBC> Eta_physbc;
+        amrex::Vector<HydroPhysBC> Terrain_physbc;
+
         // --- Static Database State ---
         // Ground Truth Layer: Split across MPI ranks uniformly at ith Level resolution.
         // These three members define the permanent, unchanging database layout.
@@ -310,6 +320,18 @@ class AmrMeshState : public amrex::AmrCore {
 
         // Flux registers for coarse-fine synchronization
         amrex::Vector<std::unique_ptr<amrex::FluxRegister>> flux_reg;  ///< One per interface; empty below the finest.
+
+        /**
+         * \brief Per level: has the terrain ghost ring been filled since the
+         * level was created or regridded?
+         *
+         * Terrain is static while the Exner coupling is unwired, so the ghost
+         * cells only change when the level's boxes change.  FillPatchTerrain
+         * returns immediately when this is set, which removes a full coarse-fine
+         * interpolation from every step.  Clear it wherever DynamicTerrain is
+         * redefined.
+         */
+        amrex::Vector<int> terrain_ghosts_valid;
 
         std::string hdf5_path;          ///< Resolved path of the input HDF5 file.
         std::string restart_chkfile;    ///< Checkpoint to resume from; empty means cold start.

@@ -15,6 +15,7 @@
 # =====================================================================
 HydroEXA.max_time          = 30       
 HydroEXA.model             = "HydrostaticRoe"     
+HydroEXA.log_verbosity = 0
 HydroEXA.cfl               = 0.5        
 
 HydroEXA.h_grad_thresh     = 0.015 0.0175 0.02 0.015

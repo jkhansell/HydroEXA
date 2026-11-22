@@ -8,9 +8,16 @@ name: docs
 # Sphinx runs with -W.  A doc comment that goes missing fails the build rather
 # than printing a warning into the log.
 #
-# Branches: `develop` integrates and `main` releases.  Both build, so a docs
-# regression is caught before it reaches a release, but only `main` deploys --
-# API pages rendered from unreleased code never reach the published site.
+# Branches: `develop` integrates and `main` releases.  Both build and both
+# deploy -- `develop` keeps the published site current with integration work,
+# and `main` republishes the same tree at release time.  Deployments share the
+# `pages` concurrency group, so they are serialised and the newest push is what
+# is live.  A pull request only builds.
+#
+# Environment: docs/pyproject.toml, a uv project outside the repository
+# workspace.  Resolving the workspace instead installs the solver's runtime
+# dependencies (fiona, GDAL, yt) to build a website, which is how this job once
+# failed on a missing wheel for the runner's Python.
 
 on:
   push:
@@ -39,7 +46,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # No submodules: the docs build reads `include/` for Doxygen and the
+      # Python sources for autodoc, and touches neither tpl/amrex nor
+      # tpl/hdf5.  Cloning them costs a minute and couples this job to
+      # third-party history it does not use.
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: Install doxygen and graphviz
         run: |
@@ -52,13 +65,13 @@ jobs:
           enable-cache: true
 
       - name: Install documentation dependencies
-        run: uv sync --group docs
+        run: cd docs && uv sync --locked
 
       - name: Doxygen XML (C++ API)
         run: cd docs/doxygen && doxygen Doxyfile
 
       - name: Sphinx HTML
-        run: uv run sphinx-build -b html -W --keep-going docs docs/_build/html
+        run: cd docs && uv run --locked sphinx-build -b html -W --keep-going . _build/html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -67,8 +80,10 @@ jobs:
 
   deploy:
     needs: build
-    # Only a release branch publishes; a develop build is a gate, not a site.
-    if: github.ref == 'refs/heads/main'
+    # Both long-lived branches publish.  A pull request, or any future trigger,
+    # is not named here and therefore does not deploy: publishing is opted into
+    # deliberately.
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

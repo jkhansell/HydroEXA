@@ -56,15 +56,10 @@ class HydroEXA
         /// Close the input file and release the I/O handler.
         void Finalize();
 
-        /// Whether the driver was asked to be chatty; read once from the inputs.
-        bool Verbose() const { return verbose; }
-
     private:
         // Core Components
         std::shared_ptr<IOHandler> IO;              // Manages all I/O operations
         std::unique_ptr<AmrMeshState> MeshState;    // Encapsulates the AMR mesh, variables, and flux registers
-
-        bool verbose{true};     ///< Copied from ``HydroEXA.verbose``.
 
         // Grouped Parameter Contexts
         RuntimeParameters runtime_params;   ///< Clock and stop time.

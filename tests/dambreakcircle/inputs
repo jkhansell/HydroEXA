@@ -3,6 +3,7 @@
 # =====================================================================
 HydroEXA.max_time          = 50.0 
 HydroEXA.model             = "Roe"  # Roe, RoeExner, RoeNoZProjection, HLLC, LaxWendroff, etc 
+HydroEXA.log_verbosity = 0
 HydroEXA.cfl               = 0.5    # CFL safety factor for hydrodynamic time stepping
 
 # Multi-level tagging thresholds (gradient thresholds per AMR level)
