@@ -1,0 +1,62 @@
+# =====================================================================
+# HYDROEXA — 2D Rectangular Dam Break, AMR, NO DISK OUTPUT
+# =====================================================================
+# Identical to inputs_amr_fastregrid except that nothing is written:
+# io.plot_freq = 0 and io.chk_freq = 0 suppress plotfiles and checkpoints
+# (src/HydroEXA.cpp gates both writes on freq > 0).  Use this variant for
+# timing and profiling runs, where per-step I/O would dominate and would
+# also make wall-clock numbers meaningless.
+#
+# Run it the same way:
+#   HYDROEXA_SKIP_PLOTS=1 bash run.sh roe amr_noio <exe> <np> <tag>
+# The run directory then holds only log.txt.
+# =====================================================================
+
+# =====================================================================
+# HYDROEXA CORE SIMULATION PARAMETERS
+# =====================================================================
+HydroEXA.max_time          = 30
+HydroEXA.model             = "Roe"
+HydroEXA.log_verbosity     = 0
+HydroEXA.cfl               = 0.5
+
+HydroEXA.h_grad_thresh     = 0.0075 0.01 0.0125 0.015
+HydroEXA.umag_grad_thresh  = 0.0075 0.01 0.0125 0.015
+HydroEXA.z_grad_thresh     = 0.0075 0.01 0.0125 0.015
+HydroEXA.mass_diag_freq    = 1000
+
+# =====================================================================
+# BOUNDARY CONDITIONS
+# =====================================================================
+# 0 = Reflective Walls, 1 = Transmissive Boundaries
+HydroEXA.lo_bc         =  1 0
+HydroEXA.hi_bc         =  1 0
+
+# =====================================================================
+# AMR RUNTIME ADAPTIVITY CONFIGURATION
+# =====================================================================
+amr.max_level              = 1
+amr.regrid_int             = 5
+amr.do_reflux              = 1
+amr.do_subcycle            = 1
+amr.blocking_factor        = 32
+amr.v                      = 1
+
+amr.terrain_ref_lev        = 1
+
+amr.ref_ratio              = 2 2 2
+
+# =====================================================================
+# I/O — DISABLED
+# =====================================================================
+# A frequency of 0 (or negative) means "never"; only a positive value
+# schedules a write.  Keeping the prefixes harmless makes it obvious that
+# nothing should appear on disk.
+io.plot_freq               = 0
+io.chk_freq                = 0
+io.async_io                = 0
+io.chk_type                = HDF5
+
+io.input_file              = "RectangularDambreak.h5"
+io.plot_file               = "outputs/roe/plt"
+io.chk_file                = "checkpoints/chk"

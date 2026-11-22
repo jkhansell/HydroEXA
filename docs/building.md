@@ -263,6 +263,77 @@ So the size is a property of the dependency build, not of this project's
 `CMakeLists.txt`. Shrinking it means rebuilding AMReX with `-DAMReX_GPU_RDC=OFF`
 first — untested here, and a dependency decision rather than a solver one.
 
+## Profiling
+
+AMReX's [TinyProfiler](https://amrex-codes.github.io/amrex/docs_html/Profiling.html)
+is a compile-time feature of AMReX: with `AMReX_TINY_PROFILE=ON`,
+`AMReX_Config.H` defines `AMREX_TINY_PROFILING`, which turns every `BL_PROFILE`
+scope in AMReX *and* in the solver into a timer. It therefore has to be an AMReX
+option, not a solver-side flag — `HYDROEXA_TINY_PROFILE` does both halves:
+
+```bash
+# -tp leaf presets: same card/precision, AMReX built with TinyProfiler
+./scripts/with-machine kabreV100.gpu -- cmake --preset kabreV100-gpu-double-tp
+./scripts/with-machine kabreV100.gpu -- cmake --build build/kabreV100-gpu-double-tp -j 16
+cd tests/dambreak && HYDROEXA_SKIP_PLOTS=1 \
+    bash run.sh roe amr_fastregrid ../../install/kabreV100-gpu-double-tp/bin/HydroEXA 1 tp1
+```
+
+Two consequences of it being an AMReX option:
+
+* the flag is part of the AMReX option key, so a profiling build gets its own
+  `tpl/install/<toolchain-tag>/<machine>/amrex_<PRECISION>_<hash>` — it never
+  reuses the uninstrumented library;
+* `src/CMakeLists.txt` refuses to configure `HYDROEXA_TINY_PROFILE=ON` against an
+  AMReX built without it, rather than silently producing a binary with no timers.
+
+The report is printed at `amrex::Finalize()`, i.e. at the end of `log.txt`:
+
+```
+TinyProfiler total time across processes [min...avg...max]: 6.24 ... 6.24 ... 6.24
+--------------------------------------------------------------------------------
+Name                                          NCalls  Excl. Min  Excl. Avg  Excl. Max   Max %
+--------------------------------------------------------------------------------
+VisMF::Write(FabArray)                            62     0.9705     0.9705     0.9705  15.55%
+FabArray::setVal()                             44152     0.6858     0.6858     0.6858  10.99%
+HydroPhysBC::()                                20679     0.4969     0.4969     0.4969   7.96%
+```
+
+Read `Excl. Max` (exclusive, i.e. self time) and `Max %`, and use `NCalls` to
+tell a cheap-but-frequent region from an expensive-but-rare one. Regions come
+from `BL_PROFILE` in `src/HydroEXA.cpp`, `src/solvers/{Roe,HydrostaticRoe}.cpp`
+and `src/state/AmrMeshState_*.cpp`; AMReX and AMReX's own headers are already
+instrumented, so `FabArray::setVal()` and friends appear without any changes
+here. Add a `BL_PROFILE("Name")` at the top of a function to widen the picture —
+it is compiled out entirely when the option is off.
+
+Instrumentation is not free, so compare a profiling build only against another
+profiling build. The single-level costs are small but the region count is large:
+`VisMF::Write` in the table above is I/O-bound and varies by a factor of three
+between runs on a shared filesystem, which is why the interesting rows are the
+compute ones.
+
+Worked example — the physical-boundary fill in `include/boundaries/BCFill.H`
+(2D dam break, `tests/dambreak`, `amr_fastregrid`, 1 rank, V100, 1361 coarse
+steps). `io.plot_freq = -1` disables plotfiles, which is how to time the solver
+itself: the `VisMF::Write` row alone swings by ±0.6 s between runs on a shared
+filesystem.
+
+| Implementation | BC row | Max % | Total |
+|---|---|---|---|
+| `PhysBCFunct<GpuBndryFuncFab<FabFillNoOp>>` rebuilt per level, no plotfiles | 2.434 s | 35.34 % | 6.886 s |
+| cached device `BCRec`, direct `FilccCell`, no plotfiles | 0.4937 s | 10.01 % | 4.933 s |
+
+That is 4.9× on the fill and 1.95 s of the 6.9 s run — all of the difference
+sits in the one row, with no I/O in either number. With plotfiles enabled
+(`io.plot_freq = 1`, ~31 dumps) the same pair reads 2.494 s / 8.449 s versus
+0.497 s / 6.240 s, i.e. the same 2.0 s with ~1.5 s of I/O noise on top.
+
+The trajectory is identical in both (`max|vel| = 0.128707045`, 1361 steps), so
+the 2.0 s is pure overhead: AMReX's functor allocates an `AsyncArray<BCRec>` and
+copies the `BCRec` set host→device for every FAB of every fill. Caching it once
+per level is worth ~28 % of this run's wall time.
+
 ## What "it builds" means here
 
 The superbuild was validated on `nukwa-03` (Tesla V100-PCIE-32GB, sm_70) with

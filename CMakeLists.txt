@@ -121,7 +121,7 @@ else()
 endif()
 string(SUBSTRING "${_toolchain_hash}" 0 8 _toolchain_tag)
 
-set(HYDROEXA_DEPS_PREFIX "${CMAKE_SOURCE_DIR}/deps/${_toolchain_tag}/${HYDROEXA_MACHINE}"
+set(HYDROEXA_DEPS_PREFIX "${CMAKE_SOURCE_DIR}/tpl/install/${_toolchain_tag}/${HYDROEXA_MACHINE}"
     CACHE PATH "Precision-agnostic dependency prefix (HDF5 lives here)")
 set(HYDROEXA_HDF5_PREFIX "${HYDROEXA_DEPS_PREFIX}/hdf5")
 set(HYDROEXA_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/install/${HYDROEXA_PRESET}"
@@ -139,6 +139,13 @@ option(AMReX_PARTICLES      "Build AMReX particles"      ON)
 option(AMReX_LINEAR_SOLVERS "Build AMReX linear solvers" ON)
 option(AMReX_HDF5           "Build AMReX HDF5 support"   ON)
 set(AMReX_SPACEDIM 2 CACHE STRING "Spatial dimension")
+
+# AMReX's TinyProfiler is a compile-time feature of AMReX itself: enabling it
+# defines AMREX_TINY_PROFILING in AMReX_Config.H, which turns every BL_PROFILE
+# in AMReX *and* in the solver into a scope timer. So it has to be an AMReX
+# option here (and in the option key below), not a solver-side flag.
+option(HYDROEXA_TINY_PROFILE
+    "Build AMReX with TinyProfiler and instrument the solver with BL_PROFILE" OFF)
 
 set(_amrex_gpu_args)
 if(HYDROEXA_GPU_BACKEND STREQUAL "CUDA")
@@ -166,7 +173,8 @@ endif()
 set(_amrex_option_key
     "mpi=${AMReX_MPI};omp=${AMReX_OMP};particles=${AMReX_PARTICLES}"
     ";linear=${AMReX_LINEAR_SOLVERS};hdf5=${AMReX_HDF5};dim=${AMReX_SPACEDIM}"
-    ";prec=${AMReX_PRECISION};gpu=${HYDROEXA_GPU_BACKEND};arch=${HYDROEXA_GPU_ARCH}")
+    ";prec=${AMReX_PRECISION};gpu=${HYDROEXA_GPU_BACKEND};arch=${HYDROEXA_GPU_ARCH}"
+    ";tiny=${HYDROEXA_TINY_PROFILE}")
 string(MD5 _amrex_hash "${_amrex_option_key}")
 string(SUBSTRING "${_amrex_hash}" 0 6 _amrex_opt_tag)
 
@@ -224,6 +232,7 @@ ExternalProject_Add(amrex
         -DAMReX_LINEAR_SOLVERS=${AMReX_LINEAR_SOLVERS}
         -DAMReX_PRECISION=${AMReX_PRECISION}
         -DAMReX_HDF5=${AMReX_HDF5}
+        -DAMReX_TINY_PROFILE=${HYDROEXA_TINY_PROFILE}
         ${_amrex_gpu_args}
     BUILD_BYPRODUCTS ${HYDROEXA_AMREX_PREFIX}/lib/cmake/AMReX/AMReXConfig.cmake
     USES_TERMINAL_CONFIGURE TRUE
@@ -255,6 +264,7 @@ ExternalProject_Add(hydroexa
         -DHYDROEXA_GPU_BACKEND=${HYDROEXA_GPU_BACKEND}
         -DHYDROEXA_GPU_ARCH=${HYDROEXA_GPU_ARCH}
         -DHYDROEXA_MPI_LINK_WORKAROUND=${HYDROEXA_MPI_LINK_WORKAROUND}
+        -DHYDROEXA_TINY_PROFILE=${HYDROEXA_TINY_PROFILE}
     USES_TERMINAL_BUILD   TRUE
     USES_TERMINAL_INSTALL TRUE
 )
@@ -268,6 +278,7 @@ message(STATUS "  preset         : ${HYDROEXA_PRESET}")
 message(STATUS "  machine        : ${HYDROEXA_MACHINE}")
 message(STATUS "  backend / arch : ${HYDROEXA_GPU_BACKEND} / ${HYDROEXA_GPU_ARCH}")
 message(STATUS "  precision      : ${AMReX_PRECISION}")
+message(STATUS "  tiny profiler  : ${HYDROEXA_TINY_PROFILE}")
 message(STATUS "  build type     : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C compiler     : ${CMAKE_C_COMPILER}")
 message(STATUS "  C++ compiler   : ${CMAKE_CXX_COMPILER}")

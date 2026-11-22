@@ -76,6 +76,8 @@ void AmrMeshState::GetData(int lev, amrex::Real time, amrex::Vector<amrex::Multi
 }
 
 void AmrMeshState::WritePlotfile(int iteration, amrex::Real time) {
+    BL_PROFILE("AmrMeshState::WritePlotfile");
+
     IO->WritePlotfile(
         U_new, DynamicTerrain,
         iteration, time,
@@ -85,6 +87,8 @@ void AmrMeshState::WritePlotfile(int iteration, amrex::Real time) {
 }
 
 void AmrMeshState::WriteCheckpoint() {
+    BL_PROFILE("AmrMeshState::WriteCheckpoint");
+
     IO->WriteCheckpoint(GetCheckpointerContext(), istep[0]);
 }
 
@@ -316,15 +320,13 @@ void AmrMeshState::ComputeMassDiagnostics(amrex::Real time, int iteration)
             g_min_h   = amrex::min(g_min_h, local_stats[lev].min_h);
         }
 
-        LOG(INFO,
-            "[Conservation] t=" + std::to_string(time)
-            + "  iter=" + std::to_string(iteration)
-            + "  mass=" + std::to_string(tot_mass)
-            + "  px=" + std::to_string(tot_mx)
-            + "  py=" + std::to_string(tot_my)
-            + "  KE=" + std::to_string(tot_ke)
-            + "  min_h=" + std::to_string(g_min_h)
-        );
+        LOG_STREAM(INFO) << "[Conservation] t=" << time
+                         << "  iter=" << iteration
+                         << "  mass=" << tot_mass
+                         << "  px=" << tot_mx
+                         << "  py=" << tot_my
+                         << "  KE=" << tot_ke
+                         << "  min_h=" << g_min_h;
 
         // Report conservation error if initial values are stored
         if (initial_mass_stored && tot_mass > 0.0) {
@@ -332,12 +334,10 @@ void AmrMeshState::ComputeMassDiagnostics(amrex::Real time, int iteration)
             amrex::Real err_mx   = (tot_mx   - initial_mom_x) / initial_mom_x * 100.0;
             amrex::Real err_my   = (tot_my   - initial_mom_y) / initial_mom_y * 100.0;
             amrex::Real err_ke   = (tot_ke   - initial_ke)    / initial_ke    * 100.0;
-            LOG(INFO,
-                "[Conservation error] dMass=" + std::to_string(err_mass) + "%"
-                + "  dPx=" + std::to_string(err_mx) + "%"
-                + "  dPy=" + std::to_string(err_my) + "%"
-                + "  dKE=" + std::to_string(err_ke) + "%"
-            );
+            LOG_STREAM(INFO) << "[Conservation error] dMass=" << err_mass << "%"
+                             << "  dPx=" << err_mx << "%"
+                             << "  dPy=" << err_my << "%"
+                             << "  dKE=" << err_ke << "%";
         }
     }
 }
@@ -445,12 +445,10 @@ void AmrMeshState::StoreInitialMassMomentum()
         initial_ke    = tot_ke;
         initial_mass_stored = true;
 
-        LOG(INFO,
-            "[Initial] mass=" + std::to_string(initial_mass)
-            + "  px=" + std::to_string(initial_mom_x)
-            + "  py=" + std::to_string(initial_mom_y)
-            + "  KE=" + std::to_string(initial_ke)
-        );
+        LOG_STREAM(INFO) << "[Initial] mass=" << initial_mass
+                         << "  px=" << initial_mom_x
+                         << "  py=" << initial_mom_y
+                         << "  KE=" << initial_ke;
     }
 
     // Broadcast stored values to all ranks so every rank has the baseline

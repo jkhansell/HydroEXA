@@ -1,0 +1,14 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "tiny-profile",
+      "displayName": "Tiny Profile (fragment)",
+      "description": "Enables AMReX Tiny Profile instrumentation (HYDROEXA_TINY_PROFILE=ON) for lightweight runtime profiling.",
+      "binaryDir": "${sourceDir}/build/.fragment/${presetName}",
+      "cacheVariables": {
+        "HYDROEXA_TINY_PROFILE": "ON"
+      }
+    }
+  ]
+}

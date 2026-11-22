@@ -1,8 +1,7 @@
 #include <solvers/Roe.H>
 #include <solvers/kernels/Roe.H>
 #include <boundaries/BCFill.H>
-#include <AMReX_ParallelDescriptor.H>
-#include <AMReX_Print.H>
+#include <utils/Logging.H>
 
 #include <memory>
 
@@ -81,16 +80,15 @@ Roe::compute_dt_Impl(const amrex::Vector<amrex::MultiFab>& U,
     amrex::Real dt_est = amrex::get<0>(local);
     amrex::Real max_vel = amrex::get<1>(local);
 
-    if (amrex::ParallelDescriptor::IOProcessor()) {
-        amrex::Print() << "[compute_dt] lev=" << lev << " dt=" << dt_est
-                       << " max|vel|=" << max_vel << "\n";
-    }
+    LOG_STREAM(EXPL) << "[compute_dt] lev=" << lev << " dt=" << dt_est
+                     << " max|vel|=" << max_vel;
 
     // dt collapse = single-cell velocity explosion. Stop instead of spinning
     // at dt=0; the per-step max|vel| trace above shows the growth history.
     if (dt_est < 1.e-12) {
-        amrex::Abort("compute_dt: dt collapsed (velocity explosion). "
-                     "Use dipole_probe.py on the latest plotfile to locate the offending cell.");
+        LOG_ERROR("compute_dt: dt collapsed on lev " + std::to_string(lev)
+                  + " (dt=" + std::to_string(dt_est)
+                  + ", max|vel|=" + std::to_string(max_vel) + ")");
     }
 
     // Apply CFL multiplier to the global safe estimate
@@ -107,6 +105,8 @@ void Roe::tag_cells_Impl(amrex::TagBoxArray& tags,
                          amrex::Real time,
                          const PhysicsParameters& phys_params)
 {
+    BL_PROFILE("Roe::tag_cells_Impl");
+
     const auto dx = geom.CellSizeArray();
     const amrex::Real z_thresh = phys_params.z_grad_thresh[lev];
     const amrex::Real h_thresh = phys_params.h_grad_thresh[lev];
@@ -250,6 +250,8 @@ Roe::reconstruct_h_from_eta(
 void
 Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real time) {
 
+    BL_PROFILE("Roe::compute_fluxes_Impl");
+
     std::swap(ctx.U_new[lev], ctx.U_old[lev]);
 
     amrex::MultiFab& U_n = ctx.U_new[lev];
@@ -298,10 +300,6 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
         F[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
         S_minus[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
         S_plus[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-
-        F[dir].setVal(0.0);
-        S_minus[dir].setVal(0.0);
-        S_plus[dir].setVal(0.0);
     }
 
     // ------------------------------------------------------------------------
@@ -314,14 +312,18 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     // fill coarse/fine boundaries
     // Rule R1: momenta cross as momenta; h is rebuilt below from the
     // transported free surface (Eta) over the grown region.
-    ctx.FillPatch(lev, time, U_o, ctx.UBCs, 1, U_o.nComp() - 1);
-    ctx.FillPatchTerrain(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
-    ctx.FillPatchEta(lev, time, Eta, ctx.EtaBCs, 0, Eta.nComp());
+    {
+        BL_PROFILE("Roe::fluxes::FillPatch");
+        ctx.FillPatch(lev, time, U_o, ctx.UBCs, 1, U_o.nComp() - 1);
+        ctx.FillPatchTerrain(lev, time, Terrain, ctx.TerrainBCs, 0, Terrain.nComp());
+        ctx.FillPatchEta(lev, time, Eta, ctx.EtaBCs, 0, Eta.nComp());
+    }
 
 #ifdef AMREX_USE_OMP    
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
     {
+        BL_PROFILE("Roe::fluxes::Kernels");
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             auto const& statein = U_o.array(mfi);
@@ -393,6 +395,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
     {
+        BL_PROFILE("Roe::fluxes::Update");
         for (amrex::MFIter mfi(U_o, amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             const int ncomp = U_o.nComp();
@@ -402,10 +405,10 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             auto const& Fy = F[1].array(mfi);
 
             auto const& Sminus_x = S_minus[0].array(mfi);
-            auto const& Splus_x = S_plus[0].array(mfi);
+            auto const& Splus_x  = S_plus[0].array(mfi);
 
             auto const& Sminus_y = S_minus[1].array(mfi);
-            auto const& Splus_y = S_plus[1].array(mfi);
+            auto const& Splus_y  = S_plus[1].array(mfi);
 
             auto const& u_o = U_o.array(mfi);
             auto const& u_n = U_n.array(mfi);
@@ -442,27 +445,11 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
     // bare physical F would mismatch the flux that actually entered its
     // update and break the C-property at the interface.
     // ------------------------------------------------------------------------
-    if (ctx.do_reflux) {
-        amrex::MultiFab flux_fine[AMREX_SPACEDIM];
-        amrex::MultiFab flux_crse[AMREX_SPACEDIM];
-
-        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir)
-        {
-            amrex::BoxArray ba = ctx.grids[lev];
-            ba.surroundingNodes(dir);
-
-            if (fr_as_fine)
-            {
-                flux_fine[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-                flux_fine[dir].setVal(0.0);
-            }
-
-            if (fr_as_crse)
-            {
-                flux_crse[dir].define(ba, ctx.dmap[lev], U_n.nComp(), 0);
-                flux_crse[dir].setVal(0.0);
-            }
-        }
+    if (ctx.do_reflux && (fr_as_fine || fr_as_crse)) {
+        BL_PROFILE("Roe::fluxes::FluxRegisters");
+        // No pre-zeroing pass: the selection kernel below sweeps every face of
+        // the level and writes an explicit zero where the face is not a
+        // coarse-fine interface, so a single pass fully defines both buffers.
 
         // 0 = coarse cell, 1 = covered by the next finer level.
         std::unique_ptr<amrex::iMultiFab> coarse_mask;
@@ -497,10 +484,10 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                     auto const& Dp = D_plus[dir].array(mfi);   // left-cell view
 
                     auto const& ff = fr_as_fine
-                        ? flux_fine[dir].array(mfi)
+                        ? flux_fine[lev][dir].array(mfi)
                         : amrex::Array4<amrex::Real>();
                     auto const& fc = fr_as_crse
-                        ? flux_crse[dir].array(mfi)
+                        ? flux_crse[lev][dir].array(mfi)
                         : amrex::Array4<amrex::Real>();
 
                     const int i_low  = grid_bx.smallEnd(dir);
@@ -545,6 +532,12 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                                     // Coarse cell is RIGHT -> its left face.
                                     fc(i,j,k,n) = Dm(i,j,k,n);
                                 }
+                                else
+                                {
+                                    // Interior face: no reflux here. Writing the
+                                    // zero here replaces a separate setVal pass.
+                                    fc(i,j,k,n) = 0.0;
+                                }
                             }
 
                             //--------------------------------------------------
@@ -562,6 +555,11 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
                                     // Fine cell is LEFT -> its right face.
                                     ff(i,j,k,n) = Dp(i,j,k,n);
                                 }
+                                else
+                                {
+                                    // Interior face: no reflux here.
+                                    ff(i,j,k,n) = 0.0;
+                                }
                             }
                         }
                     });
@@ -576,7 +574,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             {
                 const amrex::Real dA = (idim == 0) ? dy : dx;
                 const amrex::Real scale = -dt*dA;
-                fr_as_crse->CrseInit(flux_crse[idim], idim, 0, 0, U_n.nComp(),
+                fr_as_crse->CrseInit(flux_crse[lev][idim], idim, 0, 0, U_n.nComp(),
                                      scale, amrex::FluxRegister::COPY);
             }
         }
@@ -587,7 +585,7 @@ Roe::compute_fluxes_Impl(SolverContext ctx, int lev, amrex::Real dt, amrex::Real
             {
                 const amrex::Real dA = (idim == 0) ? dy : dx;
                 const amrex::Real scale = dt*dA;
-                fr_as_fine->FineAdd(flux_fine[idim], idim, 0, 0, U_n.nComp(),
+                fr_as_fine->FineAdd(flux_fine[lev][idim], idim, 0, 0, U_n.nComp(),
                                     scale);
             }
         }

@@ -16,6 +16,7 @@
 # =====================================================================
 HydroEXA.max_time          = 50        # Short run — rarefaction hasn't hit left BC yet
 HydroEXA.model             = "Roe"      # Roe solver
+HydroEXA.log_verbosity = 0
 HydroEXA.cfl               = 0.5       # Slightly conservative CFL
 
 # AMR tagging thresholds (disabled for this 1D test — level 0 only)

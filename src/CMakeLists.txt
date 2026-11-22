@@ -91,6 +91,29 @@ endif()
 message(STATUS "Using external AMReX from ${AMReX_ROOT}")
 find_package(AMReX REQUIRED)
 
+# -----------------------------------------------------------------------------
+# TinyProfiler
+# -----------------------------------------------------------------------------
+# BL_PROFILE regions are compiled in or out by AMReX itself: with
+# AMReX_TINY_PROFILE=ON, AMReX_Config.H defines AMREX_TINY_PROFILING and every
+# BL_PROFILE becomes a scope timer (see AMReX_BLProfiler.H). The solver cannot
+# switch this on by itself — it is a property of the AMReX install it links
+# against — so this variable only states the requirement and reports the state.
+option(HYDROEXA_TINY_PROFILE
+    "Require an AMReX built with TinyProfiler" OFF)
+if(HYDROEXA_TINY_PROFILE AND NOT AMReX_TINY_PROFILE)
+    message(FATAL_ERROR
+        "HYDROEXA_TINY_PROFILE=ON but the AMReX install at ${AMReX_ROOT} was "
+        "built without it (AMReX_TINY_PROFILE=OFF).\n"
+        "Rebuild AMReX with -DAMReX_TINY_PROFILE=ON, or configure the "
+        "superbuild with -DHYDROEXA_TINY_PROFILE=ON so it does that for you.")
+endif()
+if(AMReX_TINY_PROFILE)
+    message(STATUS "AMReX TinyProfiler: ON (BL_PROFILE regions are timed)")
+else()
+    message(STATUS "AMReX TinyProfiler: OFF (BL_PROFILE regions compile away)")
+endif()
+
 if(AMReX_MPI)
     find_package(MPI REQUIRED)
     message(STATUS "MPI found: ${MPI_C_VERSION}")
